@@ -278,7 +278,11 @@ void _ecs_parser_error(
         va_start(valist, fmt);
         char *msg = ecs_vasprintf(fmt, valist);
 
-        ecs_os_err("%s:%d: error: %s", name, column + 1, msg);
+        if (name) {
+            ecs_os_err("%s:%d: error: %s", name, column + 1, msg);
+        } else {
+            ecs_os_err("%d: error: %s", column + 1, msg);
+        }
         ecs_os_err("    %s", expr);
         ecs_os_err("    %*s^", column, "");
         

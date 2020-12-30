@@ -15,6 +15,8 @@
 #define TOK_ANNOTATE_CLOSE ']'
 #define TOK_WILDCARD '*'
 #define TOK_SINGLETON '$'
+#define TOK_PAREN_OPEN '('
+#define TOK_PAREN_CLOSE ')'
 
 #define TOK_ANY "ANY"
 #define TOK_OWNED "OWNED"
@@ -40,6 +42,19 @@
 #define ECS_MAX_TOKEN_SIZE (256)
 
 typedef char ecs_token_t[ECS_MAX_TOKEN_SIZE];
+
+typedef struct sig_element_t {
+    ecs_entity_t role;
+    ecs_sig_inout_kind_t inout_kind;
+    ecs_sig_from_kind_t from_kind;
+    ecs_sig_oper_kind_t oper_kind;
+    char *trait;
+    char *source;
+    char *component;
+    char *name;
+    char **argv;
+    int32_t argc;
+} sig_element_t;
 
 /** Skip spaces when parsing signature */
 static
@@ -234,16 +249,49 @@ const char* parse_annotation(
     return ptr + 1;
 }
 
-typedef struct sig_element_t {
-    ecs_entity_t role;
-    ecs_sig_inout_kind_t inout_kind;
-    ecs_sig_from_kind_t from_kind;
-    ecs_sig_oper_kind_t oper_kind;
-    char *trait;
-    char *source;
-    char *component;
-    char *name;
-} sig_element_t;
+static
+const char* parse_arguments(
+    const char *name,
+    const char *sig,
+    int64_t column,
+    const char *ptr,
+    char *token,
+    sig_element_t *elem)
+{
+    /* Previously parsed argument lists should have been cleared */
+    ecs_assert(elem->argc == 0, ECS_INTERNAL_ERROR, NULL);
+
+    do {
+        if (valid_identifier_char(ptr[0])) {
+            ptr = parse_identifier(name, sig, (ptr - sig), ptr, token);
+            if (!ptr) {
+                return NULL;
+            }
+
+            elem->argc ++;
+            elem->argv = ecs_os_realloc(
+                elem->argv, elem->argc * ECS_SIZEOF(char*));
+            elem->argv[elem->argc - 1] = ecs_os_strdup(token);
+
+            if (ptr[0] == TOK_AND) {
+                ptr = skip_space(ptr + 1);
+            } else if (ptr[0] == TOK_PAREN_CLOSE) {
+                ptr = skip_space(ptr + 1);
+                break;
+            } else {
+                ecs_parser_error(name, sig, (ptr - sig), "expected ',' or ')'");
+                return NULL;
+            }
+
+        } else {
+            ecs_parser_error(name, sig, (ptr - sig), "expected variable identifier");
+            return NULL;
+        }
+
+    } while (true);
+
+    return ptr;
+}
 
 static
 const char* parse_element(
@@ -295,6 +343,12 @@ const char* parse_element(
         if (ptr[0] == TOK_ROLE && ptr[1] != TOK_ROLE) {
             ptr ++;
             goto parse_role;
+        }
+
+        /* Is token a predicate? */
+        if (ptr[0] == TOK_PAREN_OPEN) {
+            ptr ++;
+            goto parse_predicate;    
         }
 
         /* Is token a trait? (using shorthand notation) */
@@ -397,6 +451,20 @@ parse_role:
         return NULL;
     }
 
+parse_predicate:
+    elem.component = ecs_os_strdup(token);
+    
+    ptr = skip_space(ptr);
+    if (valid_identifier_char(ptr[0])) {
+        ptr = parse_arguments(name, sig, (ptr - sig), ptr, token, &elem);
+    } else {
+        ecs_parser_error(name, sig, (ptr - sig), 
+            "expected predicate arguments");
+        return NULL;
+    }
+
+    goto parse_done;
+
 parse_trait:
     elem.trait = ecs_os_strdup(token);
 
@@ -487,7 +555,8 @@ int ecs_parse_expr(
 
         if (action(world, name, sig, ptr - sig, 
             elem.from_kind, elem.oper_kind, elem.inout_kind, elem.role,
-            elem.component, elem.source, elem.trait, elem.name, ctx))
+            elem.component, elem.source, elem.trait, elem.name, elem.argc, 
+            elem.argv, ctx))
         {
             if (!name) {
                 return -1;
@@ -557,6 +626,8 @@ int ecs_parse_signature_action(
     const char *source_id,
     const char *trait_id,
     const char *arg_name,
+    int32_t argc,
+    char **argv,
     void *data)
 {
     ecs_sig_t *sig = data;
@@ -616,7 +687,7 @@ int ecs_parse_signature_action(
 
     return ecs_sig_add(
         world, sig, from_kind, oper_kind, inout_kind, component, source, 
-        arg_name);
+        arg_name, argc, argv);
 }
 
 void ecs_sig_init(
@@ -656,7 +727,9 @@ int ecs_sig_add(
     ecs_sig_inout_kind_t inout_kind,
     ecs_entity_t component,
     ecs_entity_t source,
-    const char *arg_name)
+    const char *arg_name,
+    int32_t argc,
+    char **argv)
 {
     ecs_sig_column_t *elem;
 
@@ -740,6 +813,9 @@ int ecs_sig_add(
     } else {
         elem->name = NULL;
     }
+
+    elem->argc = argc;
+    elem->argv = argv; /* Taking ownership */
 
     return 0;
 error:
