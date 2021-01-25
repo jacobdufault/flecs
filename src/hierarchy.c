@@ -297,6 +297,10 @@ ecs_entity_t ecs_lookup_path_w_sep(
         return 0;
     }
 
+    if (path[0] == '.' && !path[1]) {
+        return EcsThis;
+    }
+
     ecs_entity_t e = find_as_alias(world, path);
     if (e) {
         return e;

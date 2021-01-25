@@ -611,6 +611,25 @@ int ecs_parse_expr(
     return 0;
 }
 
+static
+bool ecs_identifier_is_variable(
+    const char *id)
+{
+    if (id[0] == '_') {
+        return true;
+    }
+
+    const char *ptr;
+    char ch;
+    for (ptr = id; (ch = *ptr); ptr ++) {
+        if (!isupper(ch)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 /** Parse callback that adds component to the components array for a system */
 static
 int ecs_parse_signature_action(
@@ -646,17 +665,21 @@ int ecs_parse_signature_action(
         entity_id ++;
     }
 
+    ecs_entity_t source = 0, component = 0;
+    
     /* Lookup component handle by string identifier */
-    ecs_entity_t source = 0, component = ecs_lookup_fullpath(world, entity_id);
-    if (!component) {
-        /* "0" is a valid expression used to indicate that a system matches no
-         * components */
-        if (!strcmp(entity_id, "0")) {
-            /* No need to add 0 component to signature */
-            return 0;
-        } else {
-            ecs_parser_error(name, expr, column, 
-                "unresolved component identifier '%s'", entity_id);
+    if (!ecs_identifier_is_variable(entity_id)) {
+        component = ecs_lookup_fullpath(world, entity_id);
+        if (!component) {
+            /* "0" is a valid expression used to indicate that a system matches no
+            * components */
+            if (!strcmp(entity_id, "0")) {
+                /* No need to add 0 component to signature */
+                return 0;
+            } else {
+                ecs_parser_error(name, expr, column, 
+                    "unresolved component identifier '%s'", entity_id);
+            }
         }
     }
 
@@ -687,10 +710,10 @@ int ecs_parse_signature_action(
 
     return ecs_sig_add(
         world, sig, from_kind, oper_kind, inout_kind, component, source, 
-        arg_name, argc, argv);
+        entity_id, arg_name, argc, argv);
 }
 
-void ecs_sig_init(
+int ecs_sig_init(
     ecs_world_t *world,
     const char *name,
     const char *expr,
@@ -702,7 +725,10 @@ void ecs_sig_init(
         sig->expr = ecs_os_strdup("0");
     }
 
-    ecs_parse_expr(world, name, sig->expr, ecs_parse_signature_action, sig);
+    sig->columns = NULL;
+
+    return ecs_parse_expr(
+        world, name, sig->expr, ecs_parse_signature_action, sig);
 }
 
 void ecs_sig_deinit(
@@ -727,6 +753,7 @@ int ecs_sig_add(
     ecs_sig_inout_kind_t inout_kind,
     ecs_entity_t component,
     ecs_entity_t source,
+    const char *arg_type,
     const char *arg_name,
     int32_t argc,
     char **argv)
@@ -814,8 +841,28 @@ int ecs_sig_add(
         elem->name = NULL;
     }
 
+    elem->type.entity = component;
+    elem->type.name = NULL;
+    if (arg_type) {
+        elem->type.name = ecs_os_strdup(arg_type);
+    }    
+
     elem->argc = argc;
-    elem->argv = argv; /* Taking ownership */
+
+    if (argc) {
+        elem->argv = ecs_os_malloc(ECS_SIZEOF(ecs_sig_identifier_t) * argc);
+
+        int i;
+        for (i = 0; i < argc; i ++) {
+            elem->argv[i].name = argv[i];
+            if (!ecs_identifier_is_variable(argv[i])) {
+                elem->argv[i].entity = ecs_lookup_fullpath(world, argv[i]);
+            }
+        }
+
+        ecs_os_free(argv); /* Free vector, but not contents of vector */
+    }
+
 
     return 0;
 error:

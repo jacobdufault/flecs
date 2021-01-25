@@ -148,6 +148,11 @@ typedef enum ecs_sig_oper_kind_t {
     EcsOperLast = 5
 } ecs_sig_oper_kind_t;
 
+typedef struct ecs_sig_identifier_t {
+    ecs_entity_t entity;
+    char *name;
+} ecs_sig_identifier_t;
+
 /** Type that describes a single column in the system signature */
 typedef struct ecs_sig_column_t {
     ecs_sig_from_kind_t from_kind;   /* Element kind (Entity, Component) */
@@ -158,9 +163,11 @@ typedef struct ecs_sig_column_t {
         ecs_entity_t component;      /* Used for AND operator */
     } is;
     ecs_entity_t source;             /* Source entity (used with FromEntity) */
+    
+    ecs_sig_identifier_t type;
     char *name;                      /* Name of column */
-    char **argv;
     int32_t argc;
+    ecs_sig_identifier_t *argv;
 } ecs_sig_column_t;
 
 /** Type that stores a parsed signature */
@@ -172,7 +179,7 @@ typedef struct ecs_sig_t {
 
 /** Parse signature. */
 FLECS_API
-void ecs_sig_init(
+int ecs_sig_init(
     ecs_world_t *world,
     const char *name,
     const char *expr,
@@ -193,6 +200,7 @@ int ecs_sig_add(
     ecs_sig_inout_kind_t access_kind,
     ecs_entity_t component,
     ecs_entity_t source,
+    const char *arg_type,
     const char *arg_name,
     int argc,
     char **argv);

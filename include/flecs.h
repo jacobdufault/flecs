@@ -77,6 +77,12 @@ typedef struct ecs_snapshot_t ecs_snapshot_t;
 /** Queries are the primary mechanism for iterating (prematched) entities. */
 typedef struct ecs_query_t ecs_query_t;
 
+/** Rules are complex queries that can traverse entity relationships */
+typedef struct ecs_rule_t ecs_rule_t;
+
+/** Rules are complex queries that can traverse entity relationships */
+typedef struct ecs_rule_iter_t ecs_rule_iter_t;
+
 /* An iterator lets an application iterate entities across tables. */
 typedef struct ecs_iter_t ecs_iter_t;
 
@@ -323,6 +329,7 @@ typedef struct EcsTrigger {
 #define EcsWorld (ECS_HI_COMPONENT_ID + 25)
 #define EcsSingleton (ECS_HI_COMPONENT_ID + 26)
 #define EcsWildcard (ECS_HI_COMPONENT_ID + 27)
+#define EcsThis (ECS_HI_COMPONENT_ID + 28)
 
 /* Value used to quickly check if component is builtin. This is used to quickly
  * filter out tables with builtin components (for example for ecs_delete) */
@@ -2492,6 +2499,22 @@ bool ecs_query_changed(
 FLECS_API
 bool ecs_query_orphaned(
     ecs_query_t *query);
+
+/** @} */
+
+/**
+ * @defgroup rules Rules
+ * @{
+ */
+
+FLECS_API
+ecs_rule_t* ecs_rule_new(
+    ecs_world_t *world,
+    const char *expr);
+
+FLECS_API
+ecs_rule_iter_t* ecs_rule_iter_new(
+    const ecs_rule_t *rule);
 
 /** @} */
 

@@ -402,10 +402,10 @@ void add_pipeline_tags_to_sig(
     for (i = 0; i < count; i ++) {
         if (!i) {
             ecs_sig_add(world, sig, EcsFromAny, EcsOperAnd, EcsIn, entities[i], 
-                0, NULL);
+                0, NULL, NULL, 0, NULL);
         } else {
             ecs_sig_add(world, sig, EcsFromAny, EcsOperOr, EcsIn, entities[i], 
-                0, NULL);
+                0, NULL, NULL, 0, NULL);
         }
     }
 }
@@ -438,10 +438,11 @@ void EcsOnAddPipeline(
          * EcsDisabledIntern. Note that EcsDisabled is automatically ignored by
          * the regular query matching */
         ecs_sig_add(world, &sig, EcsFromAny, EcsOperAnd, EcsIn, 
-            ecs_typeid(EcsSystem), 0, NULL);
-        ecs_sig_add(world, &sig, EcsFromAny, EcsOperNot, EcsIn, EcsInactive, 0, NULL);
+            ecs_typeid(EcsSystem), 0, NULL, NULL, 0, NULL);
+        ecs_sig_add(world, &sig, EcsFromAny, EcsOperNot, EcsIn, EcsInactive, 0, 
+            NULL, NULL, 0, NULL);
         ecs_sig_add(world, &sig, EcsFromAny, EcsOperNot, EcsIn, 
-            EcsDisabledIntern, 0, NULL);
+            EcsDisabledIntern, 0, NULL, NULL, 0, NULL);
         add_pipeline_tags_to_sig(world, &sig, type_ptr->normalized);
 
         /* Create the query. Sort the query by system id and phase */
@@ -454,9 +455,9 @@ void EcsOnAddPipeline(
          * a result of another system, and as a result the correct merge 
          * operations need to be put in place. */
         ecs_sig_add(world, &sig, EcsFromAny, EcsOperAnd, EcsIn, 
-            ecs_typeid(EcsSystem), 0, NULL);
+            ecs_typeid(EcsSystem), 0, NULL, NULL, 0, NULL);
         ecs_sig_add(world, &sig, EcsFromAny, EcsOperNot, EcsIn, 
-            EcsDisabledIntern, 0, NULL);
+            EcsDisabledIntern, 0, NULL, NULL, 0, NULL);
         add_pipeline_tags_to_sig(world, &sig, type_ptr->normalized);
 
         /* Use the same sorting functions for the build query */

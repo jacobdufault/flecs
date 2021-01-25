@@ -2576,7 +2576,7 @@ const char* ecs_role_str(
     } else
     if (ECS_HAS_ROLE(entity, DISABLED)) {
         return "DISABLED";
-    } else    
+    } else       
     if (ECS_HAS_ROLE(entity, XOR)) {
         return "XOR";
     } else
@@ -2610,7 +2610,7 @@ size_t ecs_entity_str(
 {
     char *ptr = buffer;
     size_t bytes_left = buffer_len - 1, required = 0;
-    if (entity & ECS_ROLE_MASK) {
+    if (entity & ECS_ROLE_MASK && !ECS_HAS_ROLE(entity, TRAIT)) {
         const char *role = ecs_role_str(entity);
         bytes_left = append_to_str(&ptr, role, bytes_left, &required);
         bytes_left = append_to_str(&ptr, "|", bytes_left, &required);
@@ -2622,14 +2622,19 @@ size_t ecs_entity_str(
         ecs_entity_t hi = ecs_entity_t_hi(e);
 
         if (hi) {
+            bytes_left = append_to_str(&ptr, "(", bytes_left, &required);
             char *hi_path = ecs_get_fullpath(world, hi);
             bytes_left = append_to_str(&ptr, hi_path, bytes_left, &required);
             ecs_os_free(hi_path);
-            bytes_left = append_to_str(&ptr, ">", bytes_left, &required);
+            bytes_left = append_to_str(&ptr, ",", bytes_left, &required);
         }            
         char *lo_path = ecs_get_fullpath(world, lo);
         bytes_left = append_to_str(&ptr, lo_path, bytes_left, &required);
         ecs_os_free(lo_path);
+
+        if (hi) {
+            bytes_left = append_to_str(&ptr, ")", bytes_left, &required);
+        }
     } else {
         char *path = ecs_get_fullpath(world, e);
         bytes_left = append_to_str(&ptr, path, bytes_left, &required);
