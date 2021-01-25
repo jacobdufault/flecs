@@ -343,7 +343,7 @@ bool entity_is_wildcard(
     } else if (ECS_HAS_ROLE(e, TRAIT)) {
         if (ecs_entity_t_lo(e) == EcsWildcard) {
             return true;
-        } else if (ecs_entity_t_hi(e) == EcsWildcard) {
+        } else if (ecs_entity_t_hi(e & ECS_COMPONENT_MASK) == EcsWildcard) {
             return true;
         }
     }
