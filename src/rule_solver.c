@@ -156,14 +156,8 @@ typedef struct ecs_rule_register_t {
 typedef enum ecs_operation_kind_t {
     EcsRuleInput,
     EcsRuleWith,
-    EcsRuleFromEntity,
-    EcsRuleFromType,
-    EcsRuleFromTable,
-    EcsRuleMatchEntity,
-    EcsRuleMatchType,
-    EcsRuleMatchSubject,
-    EcsRuleMatchRole,
-    EcsRuleMatchPair,
+    EcsRuleFrom,
+    EcsRuleMatch,
     EcsRuleYield
 } ecs_operation_kind_t;
 
@@ -185,17 +179,23 @@ typedef struct ecs_rule_with_ctx_t {
     int32_t table_index;
 } ecs_rule_with_ctx_t;
 
+typedef struct ecs_rule_from_ctx_t {
+    ecs_type_t type;
+    int32_t column;
+} ecs_rule_from_ctx_t;
+
 typedef struct ecs_rule_operation_ctx_t {
     union {
         ecs_rule_with_ctx_t with;
+        ecs_rule_from_ctx_t from;
     } is;
 } ecs_rule_operation_ctx_t;
 
 /* Rule variables allow for the rule to be parameterized */
-typedef struct ecs_variable_t {
+typedef struct ecs_rule_variable_t {
     const char *name;
     int8_t reg;
-} ecs_variable_t;
+} ecs_rule_variable_t;
 
 /* Operation iteration state */
 typedef struct ecs_operation_state_t {
@@ -205,9 +205,10 @@ typedef struct ecs_operation_state_t {
 struct ecs_rule_t {
     ecs_world_t *world;
     ecs_rule_operation_t *operations;
-    ecs_variable_t *variables;
+    ecs_rule_variable_t *variables;
 
     int16_t operation_count;
+    int8_t register_count;
     int8_t variable_count;
     int8_t column_count;
 };
@@ -222,32 +223,40 @@ ecs_rule_operation_t* create_operation(
 }
 
 static
-const ecs_variable_t* create_variable(
+int32_t create_register(
+    ecs_rule_t *rule)
+{
+    return rule->register_count ++;
+}
+
+static
+const ecs_rule_variable_t* create_variable(
     ecs_rule_t *rule,
     const char *name)
 {
+    int8_t reg = create_register(rule);
     int8_t cur = rule->variable_count ++;
-    rule->variables = ecs_os_realloc(rule->variables, (cur + 1) * ECS_SIZEOF(ecs_variable_t));
+    rule->variables = ecs_os_realloc(rule->variables, (cur + 1) * ECS_SIZEOF(ecs_rule_variable_t));
     
-    ecs_variable_t *var = &rule->variables[cur];
+    ecs_rule_variable_t *var = &rule->variables[cur];
     var->name = ecs_os_strdup(name);
-    var->reg = cur;
+    var->reg = reg;
     return var;
 }
 
 static
-const ecs_variable_t* find_variable(
+const ecs_rule_variable_t* find_variable(
     ecs_rule_t *rule,
     const char *name)
 {
     ecs_assert(rule != NULL, ECS_INTERNAL_ERROR, NULL);
     ecs_assert(name != NULL, ECS_INTERNAL_ERROR, NULL);
 
-    ecs_variable_t *variables = rule->variables;
+    ecs_rule_variable_t *variables = rule->variables;
     int32_t i, count = rule->variable_count;
     
     for (i = 0; i < count; i ++) {
-        ecs_variable_t *variable = &variables[i];
+        ecs_rule_variable_t *variable = &variables[i];
         if (!strcmp(name, variable->name)) {
             return variable;
         }
@@ -257,11 +266,11 @@ const ecs_variable_t* find_variable(
 }
 
 static
-const ecs_variable_t* ensure_variable(
+const ecs_rule_variable_t* ensure_variable(
     ecs_rule_t *rule,
     const char *name)
 {
-    const ecs_variable_t *var = find_variable(rule, name);
+    const ecs_rule_variable_t *var = find_variable(rule, name);
     if (!var) {
         var = create_variable(rule, name);
     }
@@ -277,7 +286,7 @@ ecs_rule_pair_t column_to_pair(
 
     ecs_entity_t type_id = column->type.entity;
     if (!type_id) {
-        const ecs_variable_t *var = ensure_variable(rule, column->type.name);
+        const ecs_rule_variable_t *var = ensure_variable(rule, column->type.name);
         result.type = var->reg;
         result.reg_mask |= 1;
     } else {
@@ -293,7 +302,7 @@ ecs_rule_pair_t column_to_pair(
 
     ecs_entity_t subject_id = column->argv[1].entity;
     if (!column->argv[1].entity) {
-        const ecs_variable_t *var = ensure_variable(rule, column->argv[1].name);
+        const ecs_rule_variable_t *var = ensure_variable(rule, column->argv[1].name);
         result.subject = var->reg;
         result.reg_mask |= 2;
     } else {
@@ -347,9 +356,6 @@ int32_t find_next_match(
     int32_t column,
     ecs_entity_t look_for)
 {
-    /* If entity is not a wildcard, there can only be one match per type */
-    ecs_assert(entity_is_wildcard(look_for), ECS_INTERNAL_ERROR, NULL);
-
     /* Scan the type for the next match */
     int32_t i, count = ecs_vector_count(type);
     ecs_entity_t *entities = ecs_vector_first(type, ecs_entity_t);
@@ -360,8 +366,11 @@ int32_t find_next_match(
          * queried for entity, or the type won't contain any more matches. */
         ecs_entity_t type_id = ecs_entity_t_hi(look_for);
         if (type_id != EcsWildcard) {
-            /* Evaluate at most one element */
-            count = column + 1;
+            /* Evaluate at most one element if column is not 0. If column is 0,
+             * evaluate entire type. */
+            if (column) {
+                count = column + 1;
+            }
         }
     }
 
@@ -470,7 +479,8 @@ ecs_rule_t* ecs_rule_new(
     result->column_count = count;
 
     /* Create initial variable for This, which is always on index 0 */
-    ensure_variable(result, ".");
+    const ecs_rule_variable_t *v_this = create_variable(result, ".");
+    int8_t r_this = v_this->reg;
 
     /* Create first operation, which is always Input. This creates an entry in
      * the register stack for the initial state. */
@@ -505,12 +515,33 @@ ecs_rule_t* ecs_rule_new(
             if (result->operation_count == 2) {
                 /* The first With sets the register and has no input */
                 op->r_1 = -1;
-                op->r_2 = 0;
+                op->r_2 = r_this;
             } else {
                 /* Subsequent With's read the register, and write no output */
-                op->r_1 = 0;
+                op->r_1 = r_this;
                 op->r_2 = -1;
             }
+        }
+    }
+
+    /* Step 2: insert instructions for remaining expressions */
+    for (i = 0; i < count; i ++) {
+        ecs_sig_column_t *column = &columns[i];
+
+        if (column->argc && column->argv[0].entity != EcsThis) {
+            /* Select from other entities (not This) */
+            op = create_operation(result);
+            op->kind = EcsRuleFrom;
+            op->param.kind = EcsRuleParamPair;
+            op->param.is.entity = column_to_pair(result, column);            
+            op->on_ok = result->operation_count;
+            op->on_fail = result->operation_count - 2;
+            op->column = i;
+
+            /* Input entity */
+            const ecs_rule_variable_t *v = ensure_variable(
+                    result, column->argv[0].name);
+            op->r_1 = v->reg;
         }
     }
 
@@ -746,6 +777,84 @@ bool eval_with(
 }
 
 static
+bool eval_from(
+    ecs_rule_iter_t *it,
+    ecs_rule_operation_t *op,
+    int16_t op_index,
+    bool redo)
+{
+    ecs_world_t *world = it->rule->world;
+    ecs_type_t type = NULL;
+    int32_t column = -1;
+    ecs_rule_from_ctx_t *op_ctx = &it->op_ctx[op_index].is.from;
+    ecs_rule_register_t *regs = get_registers(it, op_index);
+
+    /* If this is not a redo, get type from input */
+    if (!redo) {
+        int8_t r_in = op->r_1;
+        ecs_rule_register_kind_t reg_kind = regs[r_in].kind;
+
+        switch(reg_kind) {
+        case EcsRuleRegisterEntity: {
+            ecs_entity_t e = regs[r_in].is.entity;
+            type = ecs_get_type(world, e);
+            break;
+        }
+        case EcsRuleRegisterType:
+            type = regs[r_in].is.type;
+            break;
+        case EcsRuleRegisterTable:
+            type = regs[r_in].is.table->type;
+            break;
+        }
+
+        op_ctx->type = type;
+        column = op_ctx->column = 0;
+
+    /* If this is a redo, continue from previous type */        
+    } else {
+        type = op_ctx->type;
+        column = op_ctx->column + 1;
+    }
+
+    /* If there is no type, there's nothing to yield */
+    if (!type) {
+        return false;
+    }
+
+    /* If column exceeds number of elements in type, nothing to yield */
+    if (column >= ecs_vector_count(type)) {
+        return false;
+    }
+
+    ecs_entity_t *elem = ecs_vector_get(type, ecs_entity_t, column);
+    ecs_assert(elem != NULL, ECS_INTERNAL_ERROR, NULL);
+
+    ecs_rule_pair_t pair = op->param.is.entity;
+    ecs_entity_t look_for = pair_to_entity(it, pair);
+    bool wildcard = entity_is_wildcard(look_for);
+    
+    if (redo && !wildcard) {
+        /* If this is a redo and the queried for entity is not a wildcard,
+         * there is nothing more to yield. */        
+        return false;
+    }
+
+    column = find_next_match(type, column, look_for);
+    if (column == -1) {
+        /* No more matches */
+        return false;
+    }
+
+    /* If this is a wildcard query, fill out the variable registers */
+    if (wildcard) {
+        resolve_variables(it, pair, type, column, look_for);
+    }
+
+    return true;
+}
+
+static
 bool eval_op(
     ecs_rule_iter_t *it, 
     ecs_rule_operation_t *op,
@@ -759,6 +868,8 @@ bool eval_op(
         return eval_yield(it, op, op_index, redo);
     case EcsRuleWith:
         return eval_with(it, op, op_index, redo);
+    case EcsRuleFrom:
+        return eval_from(it, op, op_index, redo);      
     default:
         return false;
     }
