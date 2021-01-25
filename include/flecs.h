@@ -102,17 +102,6 @@ typedef struct ecs_filter_t {
     ecs_match_kind_t exclude_kind;  /**< Match kind for exclude components */
 } ecs_filter_t;
 
-typedef struct ecs_rule_iter_t {
-    const ecs_rule_t *rule;
-    
-    struct ecs_rule_register_t *registers;   /* Variable storage */
-    struct ecs_rule_operation_ctx_t *op_ctx; /* Operation-specific state */
-    int32_t *columns;                        /* Table column indices */
-    
-    int8_t op;
-    int8_t sp;
-} ecs_rule_iter_t;
-
 /** Type that contains information about the world. */
 typedef struct ecs_world_info_t {
     ecs_entity_t last_component_id;   /**< Last issued component entity id */
@@ -2521,8 +2510,26 @@ ecs_rule_t* ecs_rule_new(
     const char *expr);
 
 FLECS_API
-ecs_rule_iter_t ecs_rule_iter(
+int32_t ecs_rule_variable_count(
     const ecs_rule_t *rule);
+
+FLECS_API
+const char* ecs_rule_variable_name(
+    const ecs_rule_t *rule,
+    int32_t var_id);
+
+FLECS_API
+ecs_entity_t ecs_rule_variable(
+    ecs_iter_t *it,
+    int32_t var_id);
+
+FLECS_API
+ecs_iter_t ecs_rule_iter(
+    const ecs_rule_t *rule);
+
+FLECS_API
+bool ecs_rule_next(
+    ecs_iter_t *it);
 
 /** @} */
 

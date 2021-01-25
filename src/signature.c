@@ -857,6 +857,8 @@ int ecs_sig_add(
             elem->argv[i].name = argv[i];
             if (!ecs_identifier_is_variable(argv[i])) {
                 elem->argv[i].entity = ecs_lookup_fullpath(world, argv[i]);
+            } else {
+                elem->argv[i].entity = 0;
             }
         }
 

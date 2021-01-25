@@ -110,7 +110,7 @@ void init_store(ecs_world_t *world) {
     ecs_sparse_set_id_source(world->store.entity_index, &world->stats.last_id);
 
     /* Initialize table index */
-    world->store.table_index = ecs_map_new(ecs_table_record_t, 8);
+    world->store.table_index = ecs_map_new(ecs_sparse_t*, 8);
 
     /* Initialize root table */
     world->store.tables = ecs_sparse_new(ecs_table_t);

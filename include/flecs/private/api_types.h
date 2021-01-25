@@ -100,6 +100,18 @@ typedef struct ecs_filter_iter_t {
     ecs_iter_table_t table;
 } ecs_filter_iter_t;
 
+/** Rule-iterator specific data */
+typedef struct ecs_rule_iter_t {
+    const ecs_rule_t *rule;
+    
+    struct ecs_rule_register_t *registers;   /* Variable storage */
+    struct ecs_rule_operation_ctx_t *op_ctx; /* Operation-specific state */
+    int32_t *columns;                        /* Table column indices */
+    
+    int8_t op;
+    int8_t sp;
+} ecs_rule_iter_t;
+
 /** Iterator flags used to quickly select the optimal iterator algorithm */
 typedef enum ecs_query_iter_kind_t {
     EcsQuerySimpleIter,     /**< No paging, sorting or sparse columns */
@@ -164,6 +176,7 @@ struct ecs_iter_t {
         ecs_filter_iter_t filter;
         ecs_query_iter_t query;
         ecs_snapshot_iter_t snapshot;
+        ecs_rule_iter_t rule;
     } iter;                       /**< Iterator specific data */
 };
 

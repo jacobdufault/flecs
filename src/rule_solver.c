@@ -33,7 +33,7 @@
  *
  * Expanded:
  * ---------
- * With(Type)
+ * With(Entity)
  *
  * From(Entity)
  * From(Type)
@@ -367,15 +367,19 @@ int32_t find_next_match(
 
     /* Mask the parts of the id that are not wildcards */
     ecs_entity_t lo = ecs_entity_t_lo(look_for);
-    ecs_entity_t hi = ecs_entity_t_hi(look_for);
+    ecs_entity_t hi = ecs_entity_t_hi(look_for & ECS_COMPONENT_MASK);
     ecs_entity_t expr_mask = ECS_ROLE_MASK & look_for;
+    ecs_entity_t eq_mask = ECS_ROLE_MASK & look_for;
 
     expr_mask |= 0xFFFFFFFF * (lo != EcsWildcard);
     expr_mask |= ((uint64_t)0xFFFFFFFF << 32) * (hi != EcsWildcard);
 
+    eq_mask |= lo * (lo != EcsWildcard);
+    eq_mask |= (hi << 32) * (hi != EcsWildcard);
+
     /* Find next column that equals look_for after masking out the wildcards */
     for (i = column; i < count; i ++) {
-        if ((entities[i] & expr_mask) == look_for) {
+        if ((entities[i] & expr_mask) == eq_mask) {
             return i;
         }
     }
@@ -389,7 +393,15 @@ ecs_rule_register_t* get_registers(
     ecs_rule_iter_t *it,
     int32_t op)    
 {
-    return &it->registers[op * it->rule->operation_count];
+    return &it->registers[op * it->rule->variable_count];
+}
+
+static
+int32_t* get_columns(
+    ecs_rule_iter_t *it,
+    int32_t op)    
+{
+    return &it->columns[op * it->rule->column_count];
 }
 
 static
@@ -452,25 +464,10 @@ ecs_rule_t* ecs_rule_new(
 
     ecs_rule_t *result = ecs_os_calloc(ECS_SIZEOF(ecs_rule_t));
     ecs_sig_column_t *columns = ecs_vector_first(sig.columns, ecs_sig_column_t);
-    int32_t i, arg, count = ecs_vector_count(sig.columns);
+    int32_t i, count = ecs_vector_count(sig.columns);
 
+    result->world = world;
     result->column_count = count;
-
-    for (i = 0; i < count; i ++) {
-        ecs_sig_column_t *column = &columns[i];
-        printf("%s", column->type.name);
-        if (column->argc) {
-            printf("(");
-            for (arg = 0; arg < column->argc; arg ++) {
-                if (arg) {
-                    printf(",");
-                }
-                printf("%s", column->argv[arg].name);
-            }
-            printf(")");
-        }
-        printf("\n");
-    }
 
     /* Create initial variable for This, which is always on index 0 */
     ensure_variable(result, ".");
@@ -505,7 +502,7 @@ ecs_rule_t* ecs_rule_new(
             op->column = i;
 
             /* Set register parameters. r_1 = in, r_2 = out */
-            if (result->operation_count == 1) {
+            if (result->operation_count == 2) {
                 /* The first With sets the register and has no input */
                 op->r_1 = -1;
                 op->r_2 = 0;
@@ -520,22 +517,56 @@ ecs_rule_t* ecs_rule_new(
     /* Insert yield instruction */
     op = create_operation(result);
     op->kind = EcsRuleYield;
-    op->on_ok = result->operation_count - 1;
-    /* Yield cannot fail */
+    op->on_fail = result->operation_count - 2;
+    /* Yield can only fail to match more */
 
     return result;
 }
 
-ecs_rule_iter_t ecs_rule_iter(
+int32_t ecs_rule_variable_count(
     const ecs_rule_t *rule)
 {
-    ecs_rule_iter_t result;
-    result.rule = rule;
+    ecs_assert(rule != NULL, ECS_INTERNAL_ERROR, NULL);
+    return rule->variable_count;
+}
+
+const char* ecs_rule_variable_name(
+    const ecs_rule_t *rule,
+    int32_t var_id)
+{
+    return rule->variables[var_id].name;
+}
+
+ecs_entity_t ecs_rule_variable(
+    ecs_iter_t *iter,
+    int32_t var_id)
+{
+    ecs_rule_iter_t *it = &iter->iter.rule;
+    ecs_rule_register_t *regs = get_registers(it, it->op);
+
+    if (regs[var_id].kind == EcsRuleRegisterEntity) {
+        return regs[var_id].is.entity;
+    } else {
+        return 0;
+    }
+}
+
+ecs_iter_t ecs_rule_iter(
+    const ecs_rule_t *rule)
+{
+    ecs_iter_t result;
+    ecs_rule_iter_t *it = &result.iter.rule;
+    it->rule = rule;
     
-    result.registers = ecs_os_malloc(rule->operation_count * rule->variable_count * ECS_SIZEOF(ecs_rule_register_t));
-    result.op_ctx = ecs_os_malloc(rule->operation_count * ECS_SIZEOF(ecs_rule_operation_ctx_t));
-    result.columns = ecs_os_malloc(rule->column_count * ECS_SIZEOF(int32_t));
-    result.op = 0;
+    it->registers = ecs_os_malloc(rule->operation_count * rule->variable_count * ECS_SIZEOF(ecs_rule_register_t));
+    it->op_ctx = ecs_os_malloc(rule->operation_count * ECS_SIZEOF(ecs_rule_operation_ctx_t));
+    it->columns = ecs_os_malloc(rule->operation_count * rule->column_count * ECS_SIZEOF(int32_t));
+    it->op = 0;
+
+    int i;
+    for (i = 0; i < rule->variable_count; i ++) {
+        it->registers[i].is.entity = EcsWildcard;
+    }
 
     return result;
 }
@@ -580,6 +611,7 @@ bool eval_with(
     ecs_world_t *world = it->rule->world;
     ecs_rule_with_ctx_t *op_ctx = &it->op_ctx[op_index].is.with;
     ecs_table_record_t *table_record = NULL;
+    ecs_rule_register_t *regs = get_registers(it, op_index);
 
     /* Get register indices for in & output */
     int8_t r_in = op->r_1;
@@ -588,8 +620,8 @@ bool eval_with(
     /* Get queried for id, fill out potential variables */
     ecs_rule_pair_t pair = op->param.is.entity;
     ecs_entity_t look_for = pair_to_entity(it, pair);
-    bool first = r_in == -1;
     bool wildcard = entity_is_wildcard(look_for);
+    bool first = r_in == -1;
 
     /* If looked for entity is not a wildcard (meaning there are no unknown/
      * unconstrained variables), this is not the first With in a chain, and this
@@ -619,6 +651,8 @@ bool eval_with(
         return false;
     }
 
+    int32_t *columns = get_columns(it, op_index);
+
     /* If this is not a redo, start at the beginning */
     if (!redo) {
         /* If this is the first With in the chain, return the first table_record
@@ -631,7 +665,7 @@ bool eval_with(
         /* If this is not the first With in the chain, get the table from the
          * input register, and test if it's a member of the table set. */
         } else {
-            table = it->registers[r_in].is.table;
+            table = regs[r_in].is.table;
             ecs_assert(table != NULL, ECS_INTERNAL_ERROR, NULL);
 
             table_record = ecs_sparse_get_sparse(
@@ -646,11 +680,11 @@ bool eval_with(
         ecs_assert(table == table_record->table, ECS_INTERNAL_ERROR, NULL);
 
         /* Set current column to first occurrence of queried for entity */
-        column = it->columns[op->column] = table_record->column;
+        column = columns[op->column] = table_record->column;
 
         /* If this is the first With in the chain, store table in register */
         if (first) {
-            it->registers[r_out].is.table = table_record->table;
+            regs[r_out].is.table = table_record->table;
         }
     
     /* If this is a redo, progress to the next match */
@@ -660,39 +694,42 @@ bool eval_with(
          * case we're looking for a wildcard. */
         if (wildcard) {
             if (first) {
-                table = it->registers[r_out].is.table;
+                table = regs[r_out].is.table;
             } else {
-                table = it->registers[r_in].is.table;
-            } 
+                table = regs[r_in].is.table;
+            }
 
             ecs_assert(table != NULL, ECS_INTERNAL_ERROR, NULL);
 
-            int32_t next_match = find_next_match(table->type, column, look_for);
-            if (next_match != -1) {
-                /* Another match has been found for the same table */
-                column = it->columns[op->column] = next_match;
-            }
+            column = columns[op->column];
+            column = find_next_match(table->type, column + 1, look_for);
+
+            columns[op->column] = column;
         }
 
         /* If no next match was found for this table, move to next table */
-        if (first) {
-            int32_t table_index = op_ctx->table_index ++;
-            table_record = ecs_sparse_get(
-                table_set, ecs_table_record_t, table_index);
-            if (!table_record) {
-                /* If no more records were found, nothing more to be done */
+        if (column == -1) {
+            if (first) {
+                int32_t table_index = ++ op_ctx->table_index;
+                if (table_index >= ecs_sparse_count(table_set)) {
+                    /* If no more records were found, nothing more to be done */
+                    return false;
+                }
+
+                table_record = ecs_sparse_get(
+                    table_set, ecs_table_record_t, table_index);
+                ecs_assert(table_record != NULL, ECS_INTERNAL_ERROR, NULL);
+
+                /* Assign new table to table register */
+                table = regs[r_out].is.table = table_record->table;
+
+                /* Assign first matching column */
+                column = columns[op->column] = table_record->column;
+            
+            /* If this is not the first With in the chain, nothing to be done */
+            } else {
                 return false;
             }
-
-            /* Assign new table to table register */
-            it->registers[r_out].is.table = table;
-
-            /* Assign first matching column */
-            column = it->columns[op->column] = table_record->column;
-        
-        /* If this is not the first With in the chain, nothing to be done */
-        } else {
-            return false;
         }
     }
 
@@ -733,22 +770,35 @@ void push_registers(
     int32_t cur,
     int32_t next)
 {
-    const ecs_rule_t *rule = it->rule;
     ecs_rule_register_t *src_regs = get_registers(it, cur);
     ecs_rule_register_t *dst_regs = get_registers(it, next);
 
     memcpy(dst_regs, src_regs, 
-        ECS_SIZEOF(ecs_rule_register_t) * rule->variable_count);
+        ECS_SIZEOF(ecs_rule_register_t) * it->rule->variable_count);
 }
 
-void ecs_rule_next(
-    ecs_rule_iter_t *it)
+static
+void push_columns(
+    ecs_rule_iter_t *it,
+    int32_t cur,
+    int32_t next)
 {
+    int32_t *src_cols = get_columns(it, cur);
+    int32_t *dst_cols = get_columns(it, next);
+
+    memcpy(dst_cols, src_cols, ECS_SIZEOF(int32_t) * it->rule->column_count);
+}
+
+bool ecs_rule_next(
+    ecs_iter_t *iter)
+{
+    ecs_rule_iter_t *it = &iter->iter.rule;
     bool redo = it->op != 0;
 
     do {
         int16_t cur = it->op;
         ecs_rule_operation_t *op = &it->rule->operations[cur];
+
         bool result = eval_op(it, op, cur, redo);
 
         /* Operation matched */
@@ -760,6 +810,7 @@ void ecs_rule_next(
 
             /* Push registers for next op */
             push_registers(it, cur, next);
+            push_columns(it, cur, next);
 
             redo = false;
 
@@ -772,8 +823,14 @@ void ecs_rule_next(
 
         /* If the current operation is yield, return results */
         if (op->kind == EcsRuleYield) {
-            return;
+            ecs_rule_register_t *regs = get_registers(it, cur);
+            ecs_table_t *table = regs[0].is.table;
+            ecs_data_t *data = ecs_table_get_data(table);
+            iter->count = ecs_table_count(table);
+            iter->entities = ecs_vector_first(data->entities, ecs_entity_t);
+            return true;
         }
-
     } while ((it->op != -1));
+
+    return false;
 }
