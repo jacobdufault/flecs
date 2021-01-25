@@ -80,9 +80,6 @@ typedef struct ecs_query_t ecs_query_t;
 /** Rules are complex queries that can traverse entity relationships */
 typedef struct ecs_rule_t ecs_rule_t;
 
-/** Rules are complex queries that can traverse entity relationships */
-typedef struct ecs_rule_iter_t ecs_rule_iter_t;
-
 /* An iterator lets an application iterate entities across tables. */
 typedef struct ecs_iter_t ecs_iter_t;
 
@@ -104,6 +101,17 @@ typedef struct ecs_filter_t {
     ecs_match_kind_t include_kind;  /**< Match kind for include components */
     ecs_match_kind_t exclude_kind;  /**< Match kind for exclude components */
 } ecs_filter_t;
+
+typedef struct ecs_rule_iter_t {
+    const ecs_rule_t *rule;
+    
+    struct ecs_rule_register_t *registers;   /* Variable storage */
+    struct ecs_rule_operation_ctx_t *op_ctx; /* Operation-specific state */
+    int32_t *columns;                        /* Table column indices */
+    
+    int8_t op;
+    int8_t sp;
+} ecs_rule_iter_t;
 
 /** Type that contains information about the world. */
 typedef struct ecs_world_info_t {
@@ -2513,7 +2521,7 @@ ecs_rule_t* ecs_rule_new(
     const char *expr);
 
 FLECS_API
-ecs_rule_iter_t* ecs_rule_iter_new(
+ecs_rule_iter_t ecs_rule_iter(
     const ecs_rule_t *rule);
 
 /** @} */

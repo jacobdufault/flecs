@@ -108,6 +108,7 @@ ecs_type_t entities_to_type(
     }
 }
 
+/* Deprecated: to be replaced by table index */
 static
 void register_child_table(
     ecs_world_t * world,
@@ -129,6 +130,36 @@ void register_child_table(
     }
 
     ecs_map_set(world->child_tables, parent, &child_tables);
+}
+
+static
+void register_table(
+    ecs_world_t *world,
+    ecs_table_t *table,
+    ecs_entity_t entity,
+    int32_t column)
+{
+    ecs_sparse_t **tables_ptr = ecs_map_ensure(
+        world->store.table_index, ecs_sparse_t*, entity);
+
+    ecs_assert(tables_ptr != NULL, ECS_INTERNAL_ERROR, NULL);
+
+    ecs_sparse_t *tables = *tables_ptr;
+
+    if (!tables) {
+        tables = *tables_ptr = ecs_sparse_new(ecs_table_record_t);
+    }
+
+    ecs_table_record_t *r = ecs_sparse_get_or_create(
+        tables, ecs_table_record_t, table->id);
+
+    /* A table can be registered for the same entity multiple times if this is
+     * a trait. In that case don't override, so that the table index contains
+     * the first column index at which the entity occurs. */
+    if (!r->table) {
+        r->table = table;
+        r->column = column;
+    }
 }
 
 static
@@ -219,6 +250,20 @@ void init_edges(
 
         if (ECS_HAS_ROLE(e, CHILDOF) || ECS_HAS_ROLE(e, INSTANCEOF)) {
             ecs_set_watch(world, e & ECS_COMPONENT_MASK);
+        }
+
+        /* Register table with table index */
+        register_table(world, table, e, i);
+
+        /* If e is trait, register table for both type and subject */
+        if (ECS_HAS_ROLE(e, TRAIT)) {
+            ecs_entity_t type_w_wildcard = ecs_trait(
+                EcsWildcard, ecs_entity_t_hi(e));
+            register_table(world, table, type_w_wildcard, i);
+
+            ecs_entity_t subject_w_wildcard = ecs_trait(
+                ecs_entity_t_lo(e), EcsWildcard);
+            register_table(world, table, subject_w_wildcard, i);
         }
     }
 

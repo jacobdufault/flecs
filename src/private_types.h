@@ -415,16 +415,28 @@ struct ecs_stage_t {
 #endif
 };
 
+/* Payload for table index which returns all tables for a given component, with
+ * the column of the component in the table. */
+typedef struct ecs_table_record_t {
+    ecs_table_t *table;
+    int32_t column;
+} ecs_table_record_t;
+
 typedef struct ecs_store_t {
-    /* Entity lookup table for (table, row) */
+    /* ecs_entity_t ->  ecs_record_t */
     ecs_sparse_t *entity_index; 
 
-    /* Table graph */
-    ecs_sparse_t *tables;
-    ecs_table_t root;
+    /* ecs_entity_t -> sparse<table id, ecs_table_record_t> */
+    ecs_map_t *table_index;
 
-    /* Lookup map for tables */
+    /* type hash -> ecs_table_t */
     ecs_map_t *table_map;
+
+    /* table id -> ecs_table_t */
+    ecs_sparse_t *tables;
+    
+    /* Table graph root (table with empty type) */
+    ecs_table_t root;
 } ecs_store_t;
 
 /** Supporting type to store looked up or derived entity data */
