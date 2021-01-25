@@ -264,6 +264,9 @@ void init_edges(
             ecs_entity_t subject_w_wildcard = ecs_trait(
                 ecs_entity_t_lo(e), EcsWildcard);
             register_table(world, table, subject_w_wildcard, i);
+
+            ecs_entity_t all_wildcard = ecs_trait(EcsWildcard, EcsWildcard);
+            register_table(world, table, all_wildcard, i);
         }
     }
 

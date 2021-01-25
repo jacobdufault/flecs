@@ -368,7 +368,7 @@ int32_t find_next_match(
         if (type_id != EcsWildcard) {
             /* Evaluate at most one element if column is not 0. If column is 0,
              * evaluate entire type. */
-            if (column) {
+            if (column && column < count) {
                 count = column + 1;
             }
         }
@@ -438,9 +438,10 @@ void resolve_variables(
              * that a previous instruction filled out the register or that the
              * variable was provided as input. */
             if (ECS_HAS_ROLE(look_for, TRAIT)) {
-                if (ecs_entity_t_hi(look_for) == EcsWildcard) {
+                if (ecs_entity_t_hi(look_for & ECS_COMPONENT_MASK) == EcsWildcard) {
                     regs[pair.type].kind = EcsRuleRegisterEntity;
-                    regs[pair.type].is.entity = ecs_entity_t_hi(*elem);
+                    regs[pair.type].is.entity = 
+                        ecs_entity_t_hi(*elem & ECS_COMPONENT_MASK);
                 }
             } else if (look_for == EcsWildcard) {
                 regs[pair.type].kind = EcsRuleRegisterEntity;
@@ -839,8 +840,8 @@ bool eval_from(
          * there is nothing more to yield. */        
         return false;
     }
-
-    column = find_next_match(type, column, look_for);
+    
+    column = op_ctx->column = find_next_match(type, column, look_for);
     if (column == -1) {
         /* No more matches */
         return false;
@@ -937,8 +938,18 @@ bool ecs_rule_next(
             ecs_rule_register_t *regs = get_registers(it, cur);
             ecs_table_t *table = regs[0].is.table;
             ecs_data_t *data = ecs_table_get_data(table);
+            if (!data) {
+                continue;
+            }
+
             iter->count = ecs_table_count(table);
+            if (!iter->count) {
+                continue;
+            }
+
             iter->entities = ecs_vector_first(data->entities, ecs_entity_t);
+            ecs_assert(iter->entities != NULL, ECS_INTERNAL_ERROR, NULL);
+
             return true;
         }
     } while ((it->op != -1));
