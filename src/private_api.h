@@ -622,9 +622,10 @@ void ecs_set_symbol(
     ecs_entity_t e,
     const char *name);
 
-/* Utility that print a descriptive error string*/
-//void ecs_print_error_string(const char *error_description, const char* signature, const char* system_id, const char* component_id);
-//void ecs_print_error_string(const char* signature, const char *system_id, const char *error_description, const char *component_id);
+/* Create string from format string & args */
+char* ecs_vasprintf(
+    const char *fmt,
+    va_list args);
 
 /* Utility that parses system signature */
 int ecs_parse_expr(

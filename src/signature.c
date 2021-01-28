@@ -841,13 +841,11 @@ int ecs_sig_add(
         elem->name = NULL;
     }
 
-    elem->type.entity = component;
-    elem->type.name = NULL;
+    elem->pred.entity = component;
+    elem->pred.name = NULL;
     if (arg_type) {
-        elem->type.name = ecs_os_strdup(arg_type);
+        elem->pred.name = ecs_os_strdup(arg_type);
     }    
-
-    elem->argc = argc;
 
     if (argc) {
         elem->argv = ecs_os_malloc(ECS_SIZEOF(ecs_sig_identifier_t) * argc);
@@ -863,8 +861,17 @@ int ecs_sig_add(
         }
 
         ecs_os_free(argv); /* Free vector, but not contents of vector */
+    } else {
+        /* If no arguments are provided, this (.) is the implicit default. */
+        argc = 1;
+        elem->argv = ecs_os_malloc(ECS_SIZEOF(ecs_sig_identifier_t));
+        elem->argv[0] = (ecs_sig_identifier_t) {
+            .entity = EcsThis,
+            .name = ecs_os_strdup(".")
+        };
     }
 
+    elem->argc = argc;
 
     return 0;
 error:

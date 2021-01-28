@@ -1,7 +1,6 @@
 #include "private_api.h"
 
-static
-char *ecs_vasprintf(
+char* ecs_vasprintf(
     const char *fmt,
     va_list args)
 {

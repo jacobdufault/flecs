@@ -164,10 +164,11 @@ typedef struct ecs_sig_column_t {
     } is;
     ecs_entity_t source;             /* Source entity (used with FromEntity) */
     
-    ecs_sig_identifier_t type;
     char *name;                      /* Name of column */
-    int32_t argc;
+    
+    ecs_sig_identifier_t pred;       /* Predicate of column */
     ecs_sig_identifier_t *argv;
+    int32_t argc;                    /* Number of arguments */
 } ecs_sig_column_t;
 
 /** Type that stores a parsed signature */
