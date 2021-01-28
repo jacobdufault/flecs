@@ -153,6 +153,7 @@ typedef struct ecs_rule_register_t {
         ecs_vector_t *type;
         ecs_table_t *table;
     } is;
+    uint8_t var_id;
 } ecs_rule_register_t;
 
 /* Operations describe how the rule should be evaluated */
@@ -216,10 +217,12 @@ struct ecs_rule_t {
     ecs_rule_variable_t *variables;
     ecs_sig_t sig;
 
-    int16_t operation_count;
     int8_t register_count;
     int8_t variable_count;
     int8_t column_count;
+    uint8_t this_id;
+
+    int16_t operation_count;
 };
 
 static
@@ -241,7 +244,9 @@ ecs_rule_operation_t* create_operation(
 {
     int8_t cur = rule->operation_count ++;
     rule->operations = ecs_os_realloc(rule->operations, (cur + 1) * ECS_SIZEOF(ecs_rule_operation_t));
-    return &rule->operations[cur];
+    ecs_rule_operation_t *result = &rule->operations[cur];
+    memset(result, 0, sizeof(ecs_rule_operation_t));
+    return result;
 }
 
 static
@@ -257,11 +262,12 @@ ecs_rule_variable_t* create_variable(
     ecs_rule_register_kind_t kind,
     const char *name)
 {
-    uint8_t reg = create_register(rule);
     uint8_t cur = ++ rule->variable_count;
     rule->variables = ecs_os_realloc(
         rule->variables, cur * ECS_SIZEOF(ecs_rule_variable_t));
     
+    uint8_t reg = create_register(rule);
+  
     ecs_rule_variable_t *var = &rule->variables[cur - 1];
     var->name = ecs_os_strdup(name);
     var->kind = kind;
@@ -519,7 +525,7 @@ uint8_t get_variable_depth(
      * is not valid. */
     if(recur >= ECS_RULE_MAX_VARIABLE_COUNT) {
         rule_error(rule, "invalid isolated variable '%s'", var->name);
-        return -1;
+        return UINT8_MAX;
     }
 
     /* Iterate columns, find all instances where 'var' is not used as object.
@@ -749,6 +755,7 @@ ecs_rule_t* ecs_rule_new(
 
     result->world = world;
     result->column_count = column_count;
+    result->this_id = UINT8_MAX;
 
     /* Create first operation, which is always Input. This creates an entry in
      * the register stack for the initial state. */
@@ -876,6 +883,89 @@ error:
     /* TODO: proper cleanup */
     ecs_os_free(result);
     return NULL;
+}
+
+static
+ecs_rule_variable_t* variable_from_reg(
+    ecs_rule_t *rule,
+    uint8_t reg)
+{
+    int32_t i, count = rule->variable_count;
+    for (i = 0; i < count; i ++) {
+        if (rule->variables[i].reg == reg) {
+            return &rule->variables[i];
+        }
+    }
+
+    return NULL;
+}
+
+char* ecs_rule_str(
+    ecs_rule_t *rule)
+{
+    ecs_strbuf_t buf = ECS_STRBUF_INIT;
+    char filter_expr[256];
+
+    int32_t i, count = rule->operation_count;
+    for (i = 1; i < count; i ++) {
+        ecs_rule_operation_t *op = &rule->operations[i];
+        ecs_rule_pair_t pair = op->param.is.entity;
+        ecs_entity_t type = pair.type;
+        ecs_entity_t subject = pair.subject;
+        const char *type_name, *subject_name;
+
+        if (pair.reg_mask & 1) {
+            ecs_rule_variable_t *type_var = variable_from_reg(rule, type);
+            type_name = type_var->name;
+        } else {
+            type_name = ecs_get_name(rule->world, type);
+        }
+
+        if (subject) {
+            if (pair.reg_mask & 2) {
+                ecs_rule_variable_t *subj_var = variable_from_reg(rule, subject);
+                subject_name = subj_var->name;
+            } else {
+                subject_name = ecs_get_name(rule->world, subject);
+            }
+        }
+
+        if (!subject) {
+            sprintf(filter_expr, "(%s)", type_name);
+        } else {
+            sprintf(filter_expr, "(%s, %s)", type_name, subject_name);
+        }
+
+        ecs_strbuf_append(&buf, "%d: [Pass:%d, Fail:%d] ", i, op->on_ok, op->on_fail);
+
+        ecs_rule_variable_t *var = variable_from_reg(rule, op->r_1);
+        if (var) {
+            ecs_strbuf_append(&buf, "%s(%s) <- ", 
+                var->kind == EcsRuleRegisterTable ? " Table" : "Entity",
+                var->name);
+        }
+
+        switch(op->kind) {
+        case EcsRuleSelect:
+            ecs_strbuf_append(&buf, "select %s", filter_expr);
+            break;
+        case EcsRuleWith:
+            ecs_strbuf_append(&buf, "with %s", filter_expr);
+            break;
+        case EcsRuleFrom:
+            ecs_strbuf_append(&buf, "from %s", filter_expr);
+            break;
+        case EcsRuleYield:
+            ecs_strbuf_append(&buf, "yield");
+            break;
+        default:
+            continue;
+        }
+
+        ecs_strbuf_appendstr(&buf, "\n");
+    }
+
+    return ecs_strbuf_get(&buf);
 }
 
 int32_t ecs_rule_variable_count(

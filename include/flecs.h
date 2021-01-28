@@ -2531,6 +2531,10 @@ FLECS_API
 bool ecs_rule_next(
     ecs_iter_t *it);
 
+FLECS_API
+char* ecs_rule_str(
+    ecs_rule_t *rule);
+
 /** @} */
 
 /**
