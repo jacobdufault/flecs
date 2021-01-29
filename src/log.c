@@ -279,16 +279,18 @@ void _ecs_parser_error(
 
         if (name) {
             ecs_os_err("%s:%d: error: %s", name, column + 1, msg);
-        } else {
+        } else if (column > 0) {
             ecs_os_err("%d: error: %s", column + 1, msg);
+        } else {
+            ecs_os_err("error: %s", msg);
         }
-        ecs_os_err("    %s", expr);
-        ecs_os_err("    %*s^", column, "");
+        if (column >= 0) {
+            ecs_os_err("    %s", expr);
+            ecs_os_err("    %*s^", column, "");
+        }
         
         ecs_os_free(msg);        
     }
-
-    ecs_os_abort();
 }
 
 void _ecs_abort(

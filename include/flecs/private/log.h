@@ -152,8 +152,7 @@ void _ecs_parser_error(
 #ifndef FLECS_LEGACY
 
 #define ecs_parser_error(name, expr, column, ...)\
-    _ecs_parser_error(name, expr, column, __VA_ARGS__);\
-    abort()
+    _ecs_parser_error(name, expr, column, __VA_ARGS__);
 
 #endif
 

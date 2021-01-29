@@ -457,6 +457,9 @@ parse_predicate:
     ptr = skip_space(ptr);
     if (valid_identifier_char(ptr[0])) {
         ptr = parse_arguments(name, sig, (ptr - sig), ptr, token, &elem);
+        if (!ptr) {
+            return NULL;
+        }
     } else {
         ecs_parser_error(name, sig, (ptr - sig), 
             "expected predicate arguments");
@@ -658,6 +661,7 @@ int ecs_parse_signature_action(
         if (from_kind ==  EcsFromEntity) {
             ecs_parser_error(name, expr, column, 
                 "singleton component '%s' cannot have a source", entity_id);
+            return -1;
         }
 
         from_kind = EcsFromEntity;
@@ -679,6 +683,7 @@ int ecs_parse_signature_action(
             } else {
                 ecs_parser_error(name, expr, column, 
                     "unresolved component identifier '%s'", entity_id);
+                return -1;
             }
         }
     }
@@ -693,6 +698,7 @@ int ecs_parse_signature_action(
         if (!trait) {
             ecs_parser_error(name, expr, column, 
                 "unresolved trait identifier '%s'", trait_id);
+            return -1;
         } else {
             component = ecs_entity_t_comb(component, trait);
         }
@@ -705,6 +711,7 @@ int ecs_parse_signature_action(
         if (!source) {
             ecs_parser_error(name, expr, column, 
                 "unresolved source identifier '%s'", source_id);
+            return -1;
         }
     }
 
@@ -768,6 +775,7 @@ int ecs_sig_add(
         if (!type) {
             ecs_parser_error(sig->name, sig->expr, 0, 
                 "AND flag can only be applied to types");
+            return -1;
         }
 
         elem->is.component = component;
@@ -786,6 +794,7 @@ int ecs_sig_add(
         if (!type) {
             ecs_parser_error(sig->name, sig->expr, 0, 
                 "OR flag can only be applied to types");
+            return -1;
         }
 
         elem->is.type = ecs_vector_copy(type->normalized, ecs_entity_t);
@@ -855,6 +864,11 @@ int ecs_sig_add(
             elem->argv[i].name = argv[i];
             if (!ecs_identifier_is_variable(argv[i])) {
                 elem->argv[i].entity = ecs_lookup_fullpath(world, argv[i]);
+                if (!elem->argv[i].entity) {
+                    ecs_parser_error(sig->name, sig->expr, -1, 
+                        "unresolved identifier '%s'", argv[i]);
+                    return -1;
+                }
             } else {
                 elem->argv[i].entity = 0;
             }

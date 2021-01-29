@@ -104,9 +104,10 @@ typedef struct ecs_filter_iter_t {
 typedef struct ecs_rule_iter_t {
     const ecs_rule_t *rule;
     
-    struct ecs_rule_register_t *registers;   /* Variable storage */
-    struct ecs_rule_operation_ctx_t *op_ctx; /* Operation-specific state */
+    struct ecs_rule_reg_t *registers;        /* Variable storage */
+    struct ecs_rule_op_ctx_t *op_ctx;        /* Operation-specific state */
     int32_t *columns;                        /* Table column indices */
+    ecs_entity_t entity;                     /* Result in case of 1 entity */
     
     int8_t op;
     int8_t sp;
