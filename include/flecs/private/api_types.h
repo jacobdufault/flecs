@@ -109,6 +109,7 @@ typedef struct ecs_rule_iter_t {
     int32_t *columns;                        /* Table column indices */
     ecs_entity_t entity;                     /* Result in case of 1 entity */
     
+    bool redo;
     int8_t op;
     int8_t sp;
 } ecs_rule_iter_t;

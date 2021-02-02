@@ -2325,10 +2325,12 @@ typedef struct ecs_filter_iter_t {
 typedef struct ecs_rule_iter_t {
     const ecs_rule_t *rule;
     
-    struct ecs_rule_register_t *registers;   /* Variable storage */
-    struct ecs_rule_operation_ctx_t *op_ctx; /* Operation-specific state */
+    struct ecs_rule_reg_t *registers;        /* Variable storage */
+    struct ecs_rule_op_ctx_t *op_ctx;        /* Operation-specific state */
     int32_t *columns;                        /* Table column indices */
+    ecs_entity_t entity;                     /* Result in case of 1 entity */
     
+    bool redo;
     int8_t op;
     int8_t sp;
 } ecs_rule_iter_t;
@@ -2903,8 +2905,7 @@ void _ecs_parser_error(
 #ifndef FLECS_LEGACY
 
 #define ecs_parser_error(name, expr, column, ...)\
-    _ecs_parser_error(name, expr, column, __VA_ARGS__);\
-    abort()
+    _ecs_parser_error(name, expr, column, __VA_ARGS__);
 
 #endif
 
@@ -5377,6 +5378,11 @@ FLECS_API
 ecs_entity_t ecs_rule_variable(
     ecs_iter_t *it,
     int32_t var_id);
+
+FLECS_API
+bool ecs_rule_variable_is_entity(
+    const ecs_rule_t *rule,
+    int32_t var_id);  
 
 FLECS_API
 ecs_iter_t ecs_rule_iter(

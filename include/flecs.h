@@ -2524,6 +2524,11 @@ ecs_entity_t ecs_rule_variable(
     int32_t var_id);
 
 FLECS_API
+bool ecs_rule_variable_is_entity(
+    const ecs_rule_t *rule,
+    int32_t var_id);  
+
+FLECS_API
 ecs_iter_t ecs_rule_iter(
     const ecs_rule_t *rule);
 
