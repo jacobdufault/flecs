@@ -44,6 +44,14 @@ int parse_line_action(
     const char *source_id, const char *trait_id, const char *arg_name,
     int32_t argc, char **argv, void *data)
 {
+    (void)from_kind;
+    (void)oper_kind;
+    (void)inout_kind;
+    (void)role;
+    (void)source_id;
+    (void)trait_id;
+    (void)arg_name;
+
     plecs_context_t *ctx = data;
     ecs_entity_t pred = 0, subj = 0, obj = 0;
 
@@ -181,7 +189,7 @@ int ecs_plecs_from_str(
             }
 
             /* Set the subject to the parsed expression */
-            ctx.subj = ctx.pred_out;
+            ctx.subj = ctx.subj_out;
 
             /* Signal that we're in a subject-predicate list */
             obj_pred_list = true;
@@ -266,7 +274,8 @@ int ecs_plecs_from_file(
 {
     FILE* file;
     char* content = NULL;
-    int size;
+    int32_t bytes;
+    size_t size;
 
     /* Open file for reading */
     file = fopen(filename, "r");
@@ -276,15 +285,16 @@ int ecs_plecs_from_file(
     }
 
     /* Determine file size */
-    fseek (file, 0 , SEEK_END);
-    size = ftell (file);
-    if (size == -1) {
+    fseek(file, 0 , SEEK_END);
+    bytes = (int32_t)ftell(file);
+    if (bytes == -1) {
         goto error;
     }
     rewind(file);
 
     /* Load contents in memory */
-    content = ecs_os_malloc(size + 1);
+    content = ecs_os_malloc(bytes + 1);
+    size = (size_t)bytes;
     if (!(size = fread(content, 1, size, file))) {
         ecs_err("%s: read zero bytes instead of %d", filename, size);
         ecs_os_free(content);

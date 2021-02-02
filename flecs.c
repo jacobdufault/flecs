@@ -8753,6 +8753,14 @@ int parse_line_action(
     const char *source_id, const char *trait_id, const char *arg_name,
     int32_t argc, char **argv, void *data)
 {
+    (void)from_kind;
+    (void)oper_kind;
+    (void)inout_kind;
+    (void)role;
+    (void)source_id;
+    (void)trait_id;
+    (void)arg_name;
+
     plecs_context_t *ctx = data;
     ecs_entity_t pred = 0, subj = 0, obj = 0;
 
@@ -8778,6 +8786,7 @@ int parse_line_action(
             obj = ensure_entity(world, argv[1]);
         }
 
+        /* Signal that expression only contained arguments */
         ctx->args_only = true;
     } else {
         if (!entity_id) {
@@ -8786,17 +8795,23 @@ int parse_line_action(
             return -1;
         }
 
+        /* If expr contains no arguments, this is a subject/atom */
         if (!argc) {
             subj = ensure_entity(world, entity_id);
+
+        /* If expr contains at least one argument, it has a predicate/subject */
         } else if (argc != 0) {
             pred = ensure_entity(world, entity_id);
             subj = ensure_entity(world, argv[0]);
         }
+
+        /* If expression contains more than one argument, it has an object */
         if (argc > 1) {
             obj = ensure_entity(world, argv[1]);
         }        
     }
 
+    /* If expression had a subject, add predicate/object */
     if (subj) {
         if (pred && !obj) {
             ecs_add_entity(world, subj, pred);
@@ -8804,6 +8819,8 @@ int parse_line_action(
             ecs_add_entity(world, subj, ecs_trait(obj, pred));
         }
 
+        /* If the expression is inside a predicate-subject expression, add all
+         * predicates on the stack */
         int i;
         for (i = 0; i < ctx->sp; i ++) {
             ecs_add_entity(world, subj, ctx->pred_obj_stack[i]);
@@ -8834,6 +8851,7 @@ int ecs_plecs_from_str(
 
         /* A newline should always follow a closing parenthesis */    
         if (expect_newline) {
+            /* Can't use is_space, since that would skip newline */
             while (ch && (ch == ' ' || ch == '\t')) {
                 ch = (++ ptr)[0];
             }
@@ -8846,7 +8864,7 @@ int ecs_plecs_from_str(
 
         /* A newline indicates that a new statement has been parsed ... */
         if (ch == '\n') {
-            /* ... unless we are in an object predicate list */
+            /* ... unless we are in a subject predicate list */
             if (!obj_pred_list) {
                 lptr[0] = '\0';
                 lptr = line;
@@ -8859,7 +8877,7 @@ int ecs_plecs_from_str(
 
             expect_newline = false;
 
-        /* If an opening bracket is found, this is an object-predicate list */
+        /* If an opening bracket is found, this is a subject-predicate list */
         } else if (ch == TOK_BRACKET_OPEN) {
             *lptr = '\0';
             lptr = line;
@@ -8880,12 +8898,12 @@ int ecs_plecs_from_str(
             }
 
             /* Set the subject to the parsed expression */
-            ctx.subj = ctx.pred_out;
+            ctx.subj = ctx.subj_out;
 
-            /* Signal that we're in an object predicate list */
+            /* Signal that we're in a subject-predicate list */
             obj_pred_list = true;
 
-        /* If an opening curly brace is found, it's a predicate-object list */
+        /* If an opening curly brace is found, it's a predicate-subject list */
         } else if (ch == TOK_CURLY_OPEN) {
             *lptr = '\0';
             lptr = line;
@@ -8895,9 +8913,16 @@ int ecs_plecs_from_str(
                 goto error;
             }
 
+            ecs_entity_t pred = 0, obj = 0;
             if (!ctx.args_only) {
-                ecs_err("expected (pred, obj)");
-                goto error;
+                if (ctx.pred_out || ctx.obj_out) {
+                    ecs_err("unexpected predicate and/or object");
+                    goto error;
+                }
+                pred = ctx.subj_out;
+            } else {
+                pred = ctx.pred_out;
+                obj = ctx.obj_out;
             }
 
             ctx.sp ++;
@@ -8907,15 +8932,14 @@ int ecs_plecs_from_str(
             }
 
             /* Push predicate or pair to the stack so that it is added to every
-             * object inside the predicate-object list */
-            if (!ctx.obj_out) {
-                ctx.pred_obj_stack[ctx.sp - 1] = ctx.pred_out;
+             * subject inside the predicate-subject list */
+            if (!obj) {
+                ctx.pred_obj_stack[ctx.sp - 1] = pred;
             } else {
-                ctx.pred_obj_stack[ctx.sp - 1] = 
-                    ecs_trait(ctx.obj_out, ctx.pred_out);
+                ctx.pred_obj_stack[ctx.sp - 1] = ecs_trait(obj, pred);
             }
 
-        /* If a closing bracket is found, close an object-predicate list */
+        /* If a closing bracket is found, close an subject-predicate list */
         } else if (ch == TOK_BRACKET_CLOSE) {
             if (!obj_pred_list) {
                 ecs_err("invalid ']' without a '['");
@@ -8930,7 +8954,7 @@ int ecs_plecs_from_str(
 
             obj_pred_list = false;
         
-        /* If a closing curly brace is found, close a predicate-object list */
+        /* If a closing curly brace is found, close a predicate-subject list */
         } else if (ch == TOK_CURLY_CLOSE) {
             if (!ctx.sp) {
                 ecs_err("invalid ']' without an '[");
@@ -8959,7 +8983,8 @@ int ecs_plecs_from_file(
 {
     FILE* file;
     char* content = NULL;
-    int size;
+    int32_t bytes;
+    size_t size;
 
     /* Open file for reading */
     file = fopen(filename, "r");
@@ -8969,15 +8994,16 @@ int ecs_plecs_from_file(
     }
 
     /* Determine file size */
-    fseek (file, 0 , SEEK_END);
-    size = ftell (file);
-    if (size == -1) {
+    fseek(file, 0 , SEEK_END);
+    bytes = (int32_t)ftell(file);
+    if (bytes == -1) {
         goto error;
     }
     rewind(file);
 
     /* Load contents in memory */
-    content = ecs_os_malloc(size + 1);
+    content = ecs_os_malloc(bytes + 1);
+    size = (size_t)bytes;
     if (!(size = fread(content, 1, size, file))) {
         ecs_err("%s: read zero bytes instead of %d", filename, size);
         ecs_os_free(content);
