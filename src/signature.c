@@ -325,6 +325,11 @@ const char* parse_element(
         ptr = skip_space(ptr + 1);
     }
 
+    if (ptr[0] == TOK_PAREN_OPEN) {
+        ptr ++;
+        goto parse_predicate;
+    }
+
     /* If next token is the start of an identifier, it could be either a type
      * role, source or component identifier */
     if (valid_identifier_char(ptr[0])) {
@@ -548,6 +553,16 @@ int ecs_parse_expr(
 {
     sig_element_t elem;
 
+    if (!sig) {
+        return 0;
+    }
+
+    sig = skip_space(sig);
+
+    if (!sig[0]) {
+        return 0;
+    }
+
     bool is_or = false;
     const char *ptr = sig;
     while ((ptr = parse_element(name, ptr, &elem))) {
@@ -604,11 +619,7 @@ int ecs_parse_expr(
     }
 
     if (!ptr) {
-        if (!name) {
-            return -1;
-        }
-        
-        ecs_abort(ECS_INVALID_SIGNATURE, sig);
+        return -1;
     }
 
     return 0;
