@@ -199,10 +199,15 @@ int ecs_plecs_from_str(
             *lptr = '\0';
             lptr = line;
 
-            /* Parse expression before the { */
+            /* Parse expression before the {. Set the sp temporarily to 0 as
+             * we don't want to add the entities from previous frames to the
+             * entity that indicates the next frame. */
+            int sp_temp = ctx.sp;
+            ctx.sp = 0;
             if (ecs_parse_expr(world, name, line, parse_line_action, &ctx)) {
                 goto error;
             }
+            ctx.sp = sp_temp;
 
             ecs_entity_t pred = 0, obj = 0;
             if (!ctx.args_only) {

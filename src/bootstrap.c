@@ -220,6 +220,12 @@ void ecs_bootstrap(
     ecs_assert(ecs_lookup(world, "*") == EcsWildcard, ECS_INTERNAL_ERROR, NULL);
     ecs_add_entity(world, EcsWildcard, ECS_CHILDOF | EcsFlecsCore);    
 
+    /* Initialize EcsTransitive */
+    ecs_set(world, EcsTransitive, EcsName, {.value = "Transitive"});
+    ecs_assert(ecs_get_name(world, EcsWildcard) != NULL, ECS_INTERNAL_ERROR, NULL);
+    ecs_assert(ecs_lookup(world, "Transitive") == EcsTransitive, ECS_INTERNAL_ERROR, NULL);
+    ecs_add_entity(world, EcsWildcard, ECS_CHILDOF | EcsFlecsCore);  
+
     ecs_set_scope(world, 0);
 
     ecs_log_pop();

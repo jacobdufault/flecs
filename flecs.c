@@ -8908,10 +8908,15 @@ int ecs_plecs_from_str(
             *lptr = '\0';
             lptr = line;
 
-            /* Parse expression before the { */
+            /* Parse expression before the {. Set the sp temporarily to 0 as
+             * we don't want to add the entities from previous frames to the
+             * entity that indicates the next frame. */
+            int sp_temp = ctx.sp;
+            ctx.sp = 0;
             if (ecs_parse_expr(world, name, line, parse_line_action, &ctx)) {
                 goto error;
             }
+            ctx.sp = sp_temp;
 
             ecs_entity_t pred = 0, obj = 0;
             if (!ctx.args_only) {
@@ -12827,7 +12832,6 @@ int32_t ecs_switch_next(
 
 #define RULE_PAIR_PREDICATE (1)
 #define RULE_PAIR_OBJECT (2)
-#define RULE_PAIR_WILDCARD (4)
 
 /* A rule pair contains a predicate and object that can be stored in a register. */
 typedef struct ecs_rule_pair_t {
@@ -12854,19 +12858,20 @@ typedef struct ecs_rule_reg_t {
 
 /* Operations describe how the rule should be evaluated */
 typedef enum ecs_rule_op_kind_t {
-    EcsRuleInput,
-    EcsRuleSelect,
-    EcsRuleWith,
-    EcsRuleEach,
-    EcsRuleFrom,
-    EcsRuleYield
+    EcsRuleInput,       /* Input placeholder, first instruction in every rule */
+    EcsRuleFollow,      /* Follows a transitive relationship depth-first */
+    EcsRuleSelect,      /* Selects all ables for a given predicate */
+    EcsRuleWith,        /* Applies a filter to a table */
+    EcsRuleEach,        /* Forwards each entity in a table */
+    EcsRuleFrom,        /* Matches predicate against entity type */
+    EcsRuleYield        /* Yield result */
 } ecs_rule_op_kind_t;
 
 /* Single operation */
 typedef struct ecs_rule_op_t {
     ecs_rule_op_kind_t kind;    /* What kind of operation is it */
     ecs_rule_pair_t param;      /* Parameter that contains optional filter */
-    ecs_entity_t subject;        /* If set, operation has a constant subject */
+    ecs_entity_t subject;       /* If set, operation has a constant subject */
 
     int16_t on_ok;              /* Jump location when match succeeds */
     int16_t on_fail;            /* Jump location when match fails */
@@ -12911,9 +12916,9 @@ typedef struct ecs_rule_op_ctx_t {
 typedef struct ecs_rule_var_t {
     ecs_rule_var_kind_t kind;
     const char *name; /* Variable name */
-    uint8_t id;       /* Unique variable id */
-    uint8_t occurs;   /* Number of occurrences (used for operation ordering) */
-    uint8_t depth;  /* Depth in dependency tree (used for operation ordering) */
+    int32_t id;       /* Unique variable id */
+    int32_t occurs;   /* Number of occurrences (used for operation ordering) */
+    int32_t depth;  /* Depth in dependency tree (used for operation ordering) */
 } ecs_rule_var_t;
 
 /* Top-level rule datastructure */
@@ -12923,9 +12928,10 @@ struct ecs_rule_t {
     ecs_rule_var_t *variables;  /* Variable array */
     ecs_sig_t sig;              /* Parsed signature expression */
 
-    uint8_t variable_count;     /* Number of variables in signature */
-    uint8_t column_count;       /* Number of columns in signature */
-    int16_t operation_count;    /* Number of operations in rule */
+    int32_t variable_count;     /* Number of variables in signature */
+    int32_t register_count;    /* Number of registers in rule */
+    int32_t column_count;       /* Number of columns in signature */
+    int32_t operation_count;    /* Number of operations in rule */
 };
 
 static
@@ -12965,7 +12971,15 @@ ecs_rule_var_t* create_variable(
         rule->variables, cur * ECS_SIZEOF(ecs_rule_var_t));
 
     ecs_rule_var_t *var = &rule->variables[cur - 1];
-    var->name = ecs_os_strdup(name);
+    if (name) {
+        var->name = ecs_os_strdup(name);
+    } else {
+        /* Anonymous register */
+        char name_buff[32];
+        sprintf(name_buff, "_%u", cur - 1);
+        var->name = ecs_os_strdup(name_buff);
+    }
+
     var->kind = kind;
 
     /* The variable id is the location in the variable array and also points to
@@ -12976,6 +12990,10 @@ ecs_rule_var_t* create_variable(
      * the root is the variable with 0 dependencies. */
     var->depth = UINT8_MAX;
     var->occurs = 0;
+
+    if (rule->register_count < rule->variable_count) {
+        rule->register_count ++;
+    }
 
     return var;
 }
@@ -13575,6 +13593,8 @@ ecs_rule_op_t* insert_operation(
     ecs_rule_t *rule,
     int32_t column_index)
 {
+    ecs_world_t *world = rule->world;
+
     ecs_rule_op_t *op = create_operation(rule);
     op->on_ok = rule->operation_count;
     op->on_fail = rule->operation_count - 2;
@@ -13587,8 +13607,46 @@ ecs_rule_op_t* insert_operation(
     if (column_index != -1) {
         ecs_sig_column_t *column = ecs_vector_get(
             rule->sig.columns, ecs_sig_column_t, column_index);
-        ecs_assert(column != NULL, ECS_INTERNAL_ERROR, NULL);     
-        op->param = column_to_pair(rule, column);
+        ecs_assert(column != NULL, ECS_INTERNAL_ERROR, NULL);    
+
+        ecs_rule_pair_t pair = column_to_pair(rule, column);
+        bool transitive = false;
+
+        /* Test if predicate is transitive */
+        if (pair.pred && pair.obj) {
+            /* If predicate is not variable, check if it's transitive */
+            if (!(pair.reg_mask & RULE_PAIR_PREDICATE)) {
+                ecs_entity_t pred_id = pair.pred;
+                transitive = ecs_has_entity(world, pred_id, EcsTransitive);
+            } else {
+                /* If predicate is variable, assume that it is transitive. This
+                 * unconditionally inserts a 'Follow' instruction. */
+                transitive = true;
+            }
+        }
+
+        /* predicate is transitive, insert a Follow instruction. Follow finds
+         * all recursive relationships for a predicate and forwards them to the
+         * next instruction. */
+        if (transitive) {
+            /* Create anonymous output register to store resolved predicate */
+            int16_t reg = rule->register_count ++;
+
+            /* Set parameters for Follow operation */
+            op->kind = EcsRuleFollow;
+            op->r_out = reg;
+            op->param = pair;
+        
+            /* Modify the pair for the actual operation so that it points to the
+             * output register of the Follow operation */
+            pair.pred = reg;
+            pair.reg_mask |= RULE_PAIR_PREDICATE;
+
+            /* Insert another operation */
+            op = insert_operation(rule, -1);
+        }
+ 
+        op->param = pair;
     } else {
         /* Not all operations have a filter (like Each) */
     }
@@ -13772,7 +13830,7 @@ ecs_rule_t* ecs_rule_new(
         op->r_out = root_entity_var->id; /* Output is entity var */
         op->has_in = true;
         op->has_out = true;
-    }   
+    }
 
     /* Iterate variables front to back, and insert operations that have the
      * iterated over variable as subject. Variables are stored in dependency
@@ -13875,6 +13933,13 @@ ecs_rule_t* ecs_rule_new(
         op->r_in = var->id;
     }
 
+    /* Insert variables for any anonymous registers that may have been created
+     * during the generation of instructions */
+    int i;
+    for (i = result->variable_count; i < result->register_count; i ++) {
+        create_variable(result, EcsRuleVarKindEntity, NULL);
+    }
+
     return result;
 error:
     /* TODO: proper cleanup */
@@ -13932,6 +13997,10 @@ char* ecs_rule_str(
         bool has_filter = false;
 
         switch(op->kind) {
+        case EcsRuleFollow:
+            ecs_strbuf_append(&buf, "follow");
+            has_filter = true;
+            break;
         case EcsRuleSelect:
             ecs_strbuf_append(&buf, "select");
             has_filter = true;
@@ -14127,6 +14196,16 @@ ecs_table_record_t* find_next_table(
         ECS_INTERNAL_ERROR, NULL);
 
     return table_record;
+}
+
+static
+bool eval_follow(
+    ecs_rule_iter_t *it,
+    ecs_rule_op_t *op,
+    int16_t op_index,
+    bool redo)
+{
+    return false;
 }
 
 /* Select operation. The select operation finds and iterates a table set that
@@ -14571,6 +14650,8 @@ bool eval_op(
     switch(op->kind) {
     case EcsRuleInput:
         return eval_input(it, op, op_index, redo);
+    case EcsRuleFollow:
+        return eval_follow(it, op, op_index, redo);
     case EcsRuleSelect:
         return eval_select(it, op, op_index, redo);
     case EcsRuleWith:
@@ -25299,6 +25380,12 @@ void ecs_bootstrap(
     ecs_assert(ecs_get_name(world, EcsWildcard) != NULL, ECS_INTERNAL_ERROR, NULL);
     ecs_assert(ecs_lookup(world, "*") == EcsWildcard, ECS_INTERNAL_ERROR, NULL);
     ecs_add_entity(world, EcsWildcard, ECS_CHILDOF | EcsFlecsCore);    
+
+    /* Initialize EcsTransitive */
+    ecs_set(world, EcsTransitive, EcsName, {.value = "Transitive"});
+    ecs_assert(ecs_get_name(world, EcsWildcard) != NULL, ECS_INTERNAL_ERROR, NULL);
+    ecs_assert(ecs_lookup(world, "Transitive") == EcsTransitive, ECS_INTERNAL_ERROR, NULL);
+    ecs_add_entity(world, EcsWildcard, ECS_CHILDOF | EcsFlecsCore);  
 
     ecs_set_scope(world, 0);
 
