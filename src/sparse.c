@@ -579,10 +579,12 @@ void* _ecs_sparse_get(
 {
     ecs_assert(sparse != NULL, ECS_INVALID_PARAMETER, NULL);
     ecs_assert(!size || size == sparse->size, ECS_INVALID_PARAMETER, NULL);
-    ecs_assert(dense_index < sparse->count, ECS_INVALID_PARAMETER, NULL);
     (void)size;
 
     dense_index ++;
+    if (dense_index >= sparse->count) {
+        return NULL;
+    }
 
     uint64_t *dense_array = ecs_vector_first(sparse->dense, uint64_t);
     return get_sparse(sparse, dense_index, dense_array[dense_index]);
