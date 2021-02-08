@@ -153,6 +153,14 @@ void fini_store(ecs_world_t *world) {
     }
     
     ecs_map_free(world->store.table_map);
+
+    it = ecs_map_iter(world->store.table_index);
+    ecs_sparse_t *ss;
+    while ((ss = ecs_map_next_ptr(&it, ecs_sparse_t*, NULL))) {
+        ecs_sparse_free(ss);
+    }
+
+    ecs_map_free(world->store.table_index);
 }
 
 /* -- Public functions -- */

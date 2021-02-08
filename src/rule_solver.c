@@ -47,7 +47,7 @@ typedef enum ecs_rule_op_kind_t {
     EcsRuleInput,       /* Input placeholder, first instruction in every rule */
     EcsRuleFollow,      /* Follows a relationship depth-first */
     EcsRuleSelect,      /* Selects all ables for a given predicate */
-    EcsRuleWith,        /* Applies a filter to a table */
+    EcsRuleWith,        /* Applies a filter to a table or entity */
     EcsRuleEach,        /* Forwards each entity in a table */
     EcsRuleYield        /* Yield result */
 } ecs_rule_op_kind_t;
@@ -114,7 +114,7 @@ typedef struct ecs_rule_op_ctx_t {
 /* Rule variables allow for the rule to be parameterized */
 typedef struct ecs_rule_var_t {
     ecs_rule_var_kind_t kind;
-    const char *name; /* Variable name */
+    char *name;       /* Variable name */
     int32_t id;       /* Unique variable id */
     int32_t occurs;   /* Number of occurrences (used for operation ordering) */
     int32_t depth;  /* Depth in dependency tree (used for operation ordering) */
@@ -422,6 +422,10 @@ bool pair_has_var(
     ecs_rule_pair_t pair,
     int32_t var_id)
 {
+    if (var_id == UINT8_MAX) {
+        return false;
+    }
+
     int8_t pred = (int8_t)pair.pred;
     int8_t obj = (int8_t)pair.obj;
 
@@ -1191,6 +1195,21 @@ error:
     return NULL;
 }
 
+void ecs_rule_free(
+    ecs_rule_t *rule)
+{
+    int32_t i;
+    for (i = 0; i < rule->variable_count; i ++) {
+        ecs_os_free(rule->variables[i].name);
+    }
+    ecs_os_free(rule->variables);
+    ecs_os_free(rule->operations);
+
+    ecs_sig_deinit(&rule->sig);
+
+    ecs_os_free(rule);
+}
+
 /* Quick convenience function to get a variable from an id */
 ecs_rule_var_t* get_variable(
     const ecs_rule_t *rule,
@@ -1379,6 +1398,18 @@ ecs_iter_t ecs_rule_iter(
     return result;
 }
 
+void ecs_rule_iter_free(
+    ecs_iter_t *iter)
+{
+    ecs_rule_iter_t *it = &iter->iter.rule;
+    ecs_os_free(it->registers);
+    ecs_os_free(it->columns);
+    ecs_os_free(it->op_ctx);
+    it->registers = NULL;
+    it->columns = NULL;
+    it->op_ctx = NULL;
+}
+
 /* Input operation. The input operation acts as a placeholder for the start of
  * the program, and creates an entry in the register array that can serve to
  * store variables passed to an iterator. */
@@ -1458,13 +1489,11 @@ bool eval_follow(
 
     /* Get queried for id, fill out potential variables */
     ecs_rule_pair_t pair = op->param;
-    ecs_entity_t look_for;
+    ecs_entity_t look_for = pair_to_entity(it, pair);
     ecs_sparse_t *table_set;
     ecs_table_t *table = NULL;
 
     if (!redo) {
-        look_for = pair_to_entity(it, pair);
-
         op_ctx->stack = op_ctx->storage;
         sp = op_ctx->sp = 0;
         frame = &op_ctx->stack[sp];
@@ -1587,7 +1616,7 @@ bool eval_follow(
 
     } while (!table);
 
-    regs[r].is.table = table;
+    regs[r].is.table = table;  
 
     return true;
 }
@@ -2118,6 +2147,8 @@ bool ecs_rule_next(
             return true;
         }
     } while ((it->op != -1));
+
+    ecs_rule_iter_free(iter);
 
     return false;
 }

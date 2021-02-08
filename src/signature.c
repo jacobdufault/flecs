@@ -576,17 +576,19 @@ int ecs_parse_expr(
             elem.component, elem.source, elem.trait, elem.name, elem.argc, 
             elem.argv, ctx))
         {
-            if (!name) {
-                return -1;
-            }
-
-            ecs_abort(ECS_INVALID_SIGNATURE, sig);
+            return -1;
         }
 
         ecs_os_free(elem.component);
         ecs_os_free(elem.source);
         ecs_os_free(elem.trait);
         ecs_os_free(elem.name);
+
+        int i;
+        for (i = 0; i < elem.argc; i ++) {
+            ecs_os_free(elem.argv[i]);
+        }
+        ecs_os_free(elem.argv);
 
         is_or = false;
         if (!strncmp(ptr, TOK_OR, 2)) {
@@ -756,7 +758,15 @@ void ecs_sig_deinit(
         if (column->oper_kind == EcsOperOr) {
             ecs_vector_free(column->is.type);
         }
+        
+        ecs_os_free(column->pred.name);
         ecs_os_free(column->name);
+
+        int i;
+        for (i = 0; i < column->argc; i ++) {
+            ecs_os_free(column->argv[i].name);
+        }
+        ecs_os_free(column->argv);
     });
 
     ecs_vector_free(sig->columns);
@@ -794,6 +804,7 @@ int ecs_sig_add(
         elem->oper_kind = EcsOperAll;
         elem->inout_kind = inout_kind;
         elem->source = source;
+        elem->argc = 0;
 
     } else 
 
@@ -813,6 +824,7 @@ int ecs_sig_add(
         elem->oper_kind = EcsOperOr;
         elem->inout_kind = inout_kind;
         elem->source = source;
+        elem->argc = 0;
     } else
 
     /* AND (default) and optional columns are stored the same way */
@@ -823,6 +835,7 @@ int ecs_sig_add(
         elem->inout_kind = inout_kind;
         elem->is.component = component;
         elem->source = source;
+        elem->argc = 0;
 
     /* OR columns store a type id instead of a single component */
     } else {
@@ -855,48 +868,47 @@ int ecs_sig_add(
         elem->oper_kind = oper_kind;
     }
 
-    if (arg_name) {
-        elem->name = ecs_os_strdup(arg_name);
-    } else {
+    if (oper_kind != EcsOperOr) {
         elem->name = NULL;
-    }
-
-    elem->pred.entity = component;
-    elem->pred.name = NULL;
-    if (arg_type) {
-        elem->pred.name = ecs_os_strdup(arg_type);
-    }    
-
-    if (argc) {
-        elem->argv = ecs_os_malloc(ECS_SIZEOF(ecs_sig_identifier_t) * argc);
-
-        int i;
-        for (i = 0; i < argc; i ++) {
-            elem->argv[i].name = argv[i];
-            if (!ecs_identifier_is_variable(argv[i])) {
-                elem->argv[i].entity = ecs_lookup_fullpath(world, argv[i]);
-                if (!elem->argv[i].entity) {
-                    ecs_parser_error(sig->name, sig->expr, -1, 
-                        "unresolved identifier '%s'", argv[i]);
-                    return -1;
-                }
-            } else {
-                elem->argv[i].entity = 0;
-            }
+        if (arg_name) {
+            elem->name = ecs_os_strdup(arg_name);
         }
 
-        ecs_os_free(argv); /* Free vector, but not contents of vector */
-    } else {
-        /* If no arguments are provided, this (.) is the implicit default. */
-        argc = 1;
-        elem->argv = ecs_os_malloc(ECS_SIZEOF(ecs_sig_identifier_t));
-        elem->argv[0] = (ecs_sig_identifier_t) {
-            .entity = EcsThis,
-            .name = ecs_os_strdup(".")
-        };
-    }
+        elem->pred.entity = component;
+        elem->pred.name = NULL;
+        if (arg_type) {
+            elem->pred.name = ecs_os_strdup(arg_type);
+        }    
 
-    elem->argc = argc;
+        if (argc) {
+            elem->argv = ecs_os_malloc(ECS_SIZEOF(ecs_sig_identifier_t) * argc);
+
+            int i;
+            for (i = 0; i < argc; i ++) {
+                elem->argv[i].name = ecs_os_strdup(argv[i]);
+                if (!ecs_identifier_is_variable(argv[i])) {
+                    elem->argv[i].entity = ecs_lookup_fullpath(world, argv[i]);
+                    if (!elem->argv[i].entity) {
+                        ecs_parser_error(sig->name, sig->expr, -1, 
+                            "unresolved identifier '%s'", argv[i]);
+                        return -1;
+                    }
+                } else {
+                    elem->argv[i].entity = 0;
+                }
+            }
+        } else {
+            /* If no arguments are provided, this (.) is the implicit default. */
+            argc = 1;
+            elem->argv = ecs_os_malloc(ECS_SIZEOF(ecs_sig_identifier_t));
+            elem->argv[0] = (ecs_sig_identifier_t) {
+                .entity = EcsThis,
+                .name = ecs_os_strdup(".")
+            };
+        }
+
+        elem->argc = argc;
+    }
 
     return 0;
 error:

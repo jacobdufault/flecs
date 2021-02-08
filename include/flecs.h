@@ -2514,6 +2514,10 @@ ecs_rule_t* ecs_rule_new(
     const char *expr);
 
 FLECS_API
+void ecs_rule_free(
+    ecs_rule_t *rule);
+
+FLECS_API
 int32_t ecs_rule_variable_count(
     const ecs_rule_t *rule);
 
@@ -2535,6 +2539,10 @@ bool ecs_rule_variable_is_entity(
 FLECS_API
 ecs_iter_t ecs_rule_iter(
     const ecs_rule_t *rule);
+
+FLECS_API
+void ecs_rule_iter_free(
+    ecs_iter_t *iter);
 
 FLECS_API
 bool ecs_rule_next(
