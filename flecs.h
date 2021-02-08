@@ -2298,7 +2298,7 @@ typedef struct ecs_page_iter_t {
 
 /** Table specific data for iterators */
 typedef struct ecs_iter_table_t {
-    int32_t *columns;        /**< Mapping from query columns to table columns */
+    int32_t *columns;         /**< Mapping to table columns */
     ecs_table_t *table;       /**< The current table. */
     ecs_data_t *data;         /**< Table component data */
     ecs_entity_t *components; /**< Components in current table */
@@ -2325,11 +2325,12 @@ typedef struct ecs_filter_iter_t {
 /** Rule-iterator specific data */
 typedef struct ecs_rule_iter_t {
     const ecs_rule_t *rule;
+    struct ecs_rule_reg_t *registers;    /**< Variable storage */
+    struct ecs_rule_op_ctx_t *op_ctx;    /**< Operation-specific state */
+    int32_t *columns;                    /**< Table column indices */
     
-    struct ecs_rule_reg_t *registers;        /* Variable storage */
-    struct ecs_rule_op_ctx_t *op_ctx;        /* Operation-specific state */
-    int32_t *columns;                        /* Table column indices */
-    ecs_entity_t entity;                     /* Result in case of 1 entity */
+    ecs_iter_table_t table;              /**< Result in case of table */
+    ecs_entity_t entity;                 /**< Result in case of 1 entity */
     
     bool redo;
     int8_t op;
@@ -2378,7 +2379,7 @@ struct ecs_iter_t {
     int32_t table_count;          /**< Active table count for query */
     int32_t inactive_table_count; /**< Inactive table count for query */
     int32_t column_count;         /**< Number of columns for system */
-    
+
     void *table_columns;          /**< Table component data */
     ecs_entity_t *entities;       /**< Entity identifiers */
 
@@ -5370,6 +5371,10 @@ ecs_rule_t* ecs_rule_new(
     const char *expr);
 
 FLECS_API
+void ecs_rule_free(
+    ecs_rule_t *rule);
+
+FLECS_API
 int32_t ecs_rule_variable_count(
     const ecs_rule_t *rule);
 
@@ -5391,6 +5396,10 @@ bool ecs_rule_variable_is_entity(
 FLECS_API
 ecs_iter_t ecs_rule_iter(
     const ecs_rule_t *rule);
+
+FLECS_API
+void ecs_rule_iter_free(
+    ecs_iter_t *iter);
 
 FLECS_API
 bool ecs_rule_next(

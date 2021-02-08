@@ -61,6 +61,7 @@ bool get_table_column(
         ecs_assert(it->table->columns != NULL, ECS_INTERNAL_ERROR, NULL);
 
         table_column = it->table->columns[column - 1];
+
         if (!table_column) {
             /* column is not set */
             return false;

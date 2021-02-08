@@ -1394,6 +1394,12 @@ ecs_iter_t ecs_rule_iter(
     for (i = 0; i < rule->variable_count; i ++) {
         it->registers[i].is.entity = EcsWildcard;
     }
+    
+    result.column_count = rule->column_count;
+    if (result.column_count) {
+        it->table.components = ecs_os_malloc(
+            result.column_count * ECS_SIZEOF(ecs_entity_t));
+    }
 
     return result;
 }
@@ -1405,6 +1411,7 @@ void ecs_rule_iter_free(
     ecs_os_free(it->registers);
     ecs_os_free(it->columns);
     ecs_os_free(it->op_ctx);
+    ecs_os_free(it->table.components);
     it->registers = NULL;
     it->columns = NULL;
     it->op_ctx = NULL;
@@ -1746,7 +1753,7 @@ bool eval_select(
         reify_variables(it, pair, table->type, column, look_for);
     }
 
-    return true;    
+    return true;
 }
 
 static
@@ -2130,6 +2137,21 @@ bool ecs_rule_next(
                     iter->entities = ecs_vector_first(
                         data->entities, ecs_entity_t);
                     ecs_assert(iter->entities != NULL, ECS_INTERNAL_ERROR, NULL);
+
+                    /* Set table parameters */
+                    it->table.columns = get_columns(it, cur);
+                    it->table.data = data;
+                    iter->table = &it->table;
+                    iter->table_columns = data->columns;
+
+                    /* Iterator expects column indices to start at 1. Can safely
+                     * modify the column ids, since the array is private to the
+                     * yield operation. */
+                    for (int i = 0; i < iter->column_count; i ++) {
+                        it->table.components[i] = *ecs_vector_get(
+                            table->type, ecs_entity_t, it->table.columns[i]);
+                        it->table.columns[i] ++;
+                    }
                 } else {
                     /* If a single entity is returned, simply return the
                      * iterator with count 1 and a pointer to the entity id */

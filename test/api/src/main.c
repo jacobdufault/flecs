@@ -8,6 +8,28 @@
 
 #include <api.h>
 
+// Testsuite 'Rules'
+void Rules_1_comp(void);
+void Rules_2_comp(void);
+void Rules_1_comp_explicit_subject(void);
+void Rules_2_comp_explicit_subject(void);
+void Rules_1_fact_true(void);
+void Rules_1_fact_false(void);
+void Rules_2_facts_true(void);
+void Rules_2_facts_1_false(void);
+void Rules_2_facts_false(void);
+void Rules_1_fact_pair_true(void);
+void Rules_1_fact_pair_false(void);
+void Rules_2_fact_pairs_true(void);
+void Rules_2_fact_pairs_1_false(void);
+void Rules_2_fact_pairs_false(void);
+void Rules_find_1_pair(void);
+void Rules_find_2_pairs(void);
+void Rules_find_1_pair_w_object_var(void);
+void Rules_find_2_pairs_w_object_var(void);
+void Rules_find_1_pair_w_pred_var(void);
+void Rules_find_2_pairs_w_pred_var(void);
+
 // Testsuite 'New'
 void New_setup(void);
 void New_empty(void);
@@ -1494,6 +1516,89 @@ void Error_log_dbg(void);
 void Error_log_log(void);
 void Error_log_warning(void);
 void Error_log_error(void);
+
+bake_test_case Rules_testcases[] = {
+    {
+        "1_comp",
+        Rules_1_comp
+    },
+    {
+        "2_comp",
+        Rules_2_comp
+    },
+    {
+        "1_comp_explicit_subject",
+        Rules_1_comp_explicit_subject
+    },
+    {
+        "2_comp_explicit_subject",
+        Rules_2_comp_explicit_subject
+    },
+    {
+        "1_fact_true",
+        Rules_1_fact_true
+    },
+    {
+        "1_fact_false",
+        Rules_1_fact_false
+    },
+    {
+        "2_facts_true",
+        Rules_2_facts_true
+    },
+    {
+        "2_facts_1_false",
+        Rules_2_facts_1_false
+    },
+    {
+        "2_facts_false",
+        Rules_2_facts_false
+    },
+    {
+        "1_fact_pair_true",
+        Rules_1_fact_pair_true
+    },
+    {
+        "1_fact_pair_false",
+        Rules_1_fact_pair_false
+    },
+    {
+        "2_fact_pairs_true",
+        Rules_2_fact_pairs_true
+    },
+    {
+        "2_fact_pairs_1_false",
+        Rules_2_fact_pairs_1_false
+    },
+    {
+        "2_fact_pairs_false",
+        Rules_2_fact_pairs_false
+    },
+    {
+        "find_1_pair",
+        Rules_find_1_pair
+    },
+    {
+        "find_2_pairs",
+        Rules_find_2_pairs
+    },
+    {
+        "find_1_pair_w_object_var",
+        Rules_find_1_pair_w_object_var
+    },
+    {
+        "find_2_pairs_w_object_var",
+        Rules_find_2_pairs_w_object_var
+    },
+    {
+        "find_1_pair_w_pred_var",
+        Rules_find_1_pair_w_pred_var
+    },
+    {
+        "find_2_pairs_w_pred_var",
+        Rules_find_2_pairs_w_pred_var
+    }
+};
 
 bake_test_case New_testcases[] = {
     {
@@ -7050,6 +7155,13 @@ bake_test_case Error_testcases[] = {
 
 static bake_test_suite suites[] = {
     {
+        "Rules",
+        NULL,
+        NULL,
+        20,
+        Rules_testcases
+    },
+    {
         "New",
         New_setup,
         NULL,
@@ -7466,5 +7578,5 @@ static bake_test_suite suites[] = {
 
 int main(int argc, char *argv[]) {
     ut_init(argv[0]);
-    return bake_test_run("api", argc, argv, suites, 59);
+    return bake_test_run("api", argc, argv, suites, 60);
 }
