@@ -2522,6 +2522,11 @@ int32_t ecs_rule_variable_count(
     const ecs_rule_t *rule);
 
 FLECS_API
+int32_t ecs_rule_find_variable(
+    const ecs_rule_t *rule,
+    const char *name);    
+
+FLECS_API
 const char* ecs_rule_variable_name(
     const ecs_rule_t *rule,
     int32_t var_id);

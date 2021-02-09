@@ -208,7 +208,7 @@ ecs_rule_var_t* create_variable(
  * have the same name. */
 static
 ecs_rule_var_t* find_variable(
-    ecs_rule_t *rule,
+    const ecs_rule_t *rule,
     ecs_rule_var_kind_t kind,
     const char *name)
 {
@@ -851,6 +851,13 @@ void ensure_all_variables(
             ensure_variable(rule, EcsRuleVarKindEntity, column->pred.name);
         }
 
+        /* If subject is a variable and it is not This, make sure it is 
+         * registered as an entity variable. This ensures that the program will
+         * correctly return all permutations */
+        if (!column->argv[0].entity) {
+            ensure_variable(rule, EcsRuleVarKindEntity, column->argv[0].name);
+        }
+
         /* If object is a variable, make sure it has been registered */
         if (column->argc > 1 && (!column->argv[1].entity || 
             column->argv[1].entity == EcsThis)) 
@@ -956,12 +963,6 @@ bool is_transitive(
         if (!(pair.reg_mask & RULE_PAIR_PREDICATE)) {
             ecs_entity_t pred_id = pair.pred;
             transitive = ecs_has_entity(world, pred_id, EcsTransitive);
-        } else {
-            /* If predicate is variable, assume that it is transitive. This
-             * adds overhead during evaluation as the variable predicate must be
-             * tested for transitiveness, but is necessary to yield correct
-             * results. */
-            transitive = true;
         }
     }
 
@@ -1088,6 +1089,18 @@ ecs_rule_t* ecs_rule_new(
             continue;
         }
 
+        /* If predicate and/or object are variables, mark them as written */
+        ecs_rule_var_t 
+        *pred = column_pred(result, column),
+        *obj = column_obj(result, column);
+
+        if (pred) {
+            write_variable(result, pred, c, written);
+        }
+        if (obj) {
+            write_variable(result, obj, c, written);
+        } 
+
         op = insert_operation(result, c);
         op->kind = EcsRuleWith;
         op->r_in = UINT8_MAX; /* Indicate literal */
@@ -1159,9 +1172,56 @@ ecs_rule_t* ecs_rule_new(
 
                 /* A select reifies the table variable */
                 written[var->id] = true;
-            }           
+            }      
         }
     }
+
+    /* Verify all subject variables have been written. Subject variables are of
+     * the table type, and a select/follow should have been inserted for each */
+    for (v = 0; v < result->subject_variable_count; v ++) {
+        if (!written[v]) {
+            /* If the table variable hasn't been written, this can only happen
+             * if an instruction wrote the variable before a select/follow could
+             * have been inserted for it. Make sure that this is the case by
+             * testing if an entity variable exists and whether it has been
+             * written. */
+            ecs_rule_var_t *var = find_variable(
+                result, EcsRuleVarKindEntity, result->variables[v].name);
+            ecs_assert(written[var->id], ECS_INTERNAL_ERROR, NULL);
+        }
+    }
+
+    /* Make sure that all entity variables are written. With the exception of
+     * the this variable, which can be returned as a table, other variables need
+     * to be available as entities. This ensures that all permutations for all
+     * variables are correctly returned by the iterator. When an entity variable
+     * hasn't been written yet at this point, it is because it only constrained
+     * through a common predicate or object. */
+    for (; v < result->variable_count; v ++) {
+        if (!written[v]) {
+            ecs_rule_var_t *var = &result->variables[v];
+            ecs_assert(var->kind == EcsRuleVarKindEntity, 
+                ECS_INTERNAL_ERROR, NULL);
+
+            ecs_rule_var_t *table_var = find_variable(
+                result, EcsRuleVarKindTable, var->name);
+            
+            /* A table variable must exist if the variable hasn't been resolved
+             * yet. If there doesn't exist one, this could indicate an 
+             * unconstrained variable which should have been caught earlier */
+            ecs_assert(table_var != NULL, ECS_INTERNAL_ERROR, NULL);
+
+            /* Insert each operation that takes the table variable as input, and
+             * yields each entity in the table */
+            op = insert_operation(result, -1);
+            op->kind = EcsRuleEach;
+            op->r_in = table_var->id;
+            op->r_out = var->id;
+            op->has_in = true;
+            op->has_out = true;
+            written[var->id] = true;
+        }
+    }     
 
     /* Insert yield instruction */
     op = create_operation(result);
@@ -1328,6 +1388,19 @@ int32_t ecs_rule_variable_count(
 {
     ecs_assert(rule != NULL, ECS_INTERNAL_ERROR, NULL);
     return rule->variable_count;
+}
+
+/* Public function to find a variable by name */
+int32_t ecs_rule_find_variable(
+    const ecs_rule_t *rule,
+    const char *name)
+{
+    ecs_rule_var_t *v = find_variable(rule, EcsRuleVarKindEntity, name);
+    if (v) {
+        return v->id;
+    } else {
+        return -1;
+    }
 }
 
 /* Public function to get the name of a variable. */
@@ -1753,6 +1826,10 @@ bool eval_select(
         reify_variables(it, pair, table->type, column, look_for);
     }
 
+    ecs_entity_t *comp = ecs_vector_get(table->type, ecs_entity_t, column);
+    ecs_assert(comp != NULL, ECS_INTERNAL_ERROR, NULL);
+    it->table.components[op->column] = *comp;
+
     return true;
 }
 
@@ -1910,6 +1987,10 @@ bool eval_with(
         reify_variables(it, pair, table->type, column, look_for);
     }
 
+    ecs_entity_t *comp = ecs_vector_get(table->type, ecs_entity_t, column);
+    ecs_assert(comp != NULL, ECS_INTERNAL_ERROR, NULL);
+    it->table.components[op->column] = *comp;    
+
     return true;
 }
 
@@ -2055,6 +2136,45 @@ void push_columns(
     memcpy(dst_cols, src_cols, ECS_SIZEOF(int32_t) * it->rule->column_count);
 }
 
+static
+void set_iter_table(
+    ecs_iter_t *iter,
+    ecs_table_t *table,
+    int32_t cur)
+{
+    ecs_rule_iter_t *it = &iter->iter.rule;
+
+    ecs_data_t *data = ecs_table_get_data(table);
+
+    /* Table must have data, or otherwise it wouldn't yield */
+    ecs_assert(data != NULL, ECS_INTERNAL_ERROR, NULL);
+
+    /* Tell the iterator how many entities there are */
+    iter->count = ecs_table_data_count(data);
+    ecs_assert(iter->count != 0, ECS_INTERNAL_ERROR, NULL);
+
+    /* Set the entities array */
+    iter->entities = ecs_vector_first(data->entities, ecs_entity_t);
+    ecs_assert(iter->entities != NULL, ECS_INTERNAL_ERROR, NULL);
+
+    /* Set table parameters */
+    it->table.columns = get_columns(it, cur);
+    it->table.data = data;
+    iter->table = &it->table;
+    iter->table_columns = data->columns;
+
+    ecs_assert(it->table.components != NULL, ECS_INTERNAL_ERROR, NULL);
+    ecs_assert(it->table.columns != NULL, ECS_INTERNAL_ERROR, NULL);
+    ecs_assert(table->type != NULL, ECS_INTERNAL_ERROR, NULL);
+
+    /* Iterator expects column indices to start at 1. Can safely
+     * modify the column ids, since the array is private to the
+     * yield operation. */
+    for (int i = 0; i < iter->column_count; i ++) {
+        it->table.columns[i] ++;
+    }    
+}
+
 /* Iterator next function. This evaluates the program until it reaches a Yield
  * operation, and returns the intermediate result(s) to the application. An
  * iterator can, depending on the program, either return a table, entity, or
@@ -2124,43 +2244,24 @@ bool ecs_rule_next(
 
                 if (var->kind == EcsRuleVarKindTable) {
                     ecs_table_t *table = reg->is.table;
-                    ecs_data_t *data = ecs_table_get_data(table);
-
-                    /* Table must have data, or otherwise it wouldn't yield */
-                    ecs_assert(data != NULL, ECS_INTERNAL_ERROR, NULL);
-
-                    /* Tell the iterator how many entities there are */
-                    iter->count = ecs_table_data_count(data);
-                    ecs_assert(iter->count != 0, ECS_INTERNAL_ERROR, NULL);
-
-                    /* Set the entities array */
-                    iter->entities = ecs_vector_first(
-                        data->entities, ecs_entity_t);
-                    ecs_assert(iter->entities != NULL, ECS_INTERNAL_ERROR, NULL);
-
-                    /* Set table parameters */
-                    it->table.columns = get_columns(it, cur);
-                    it->table.data = data;
-                    iter->table = &it->table;
-                    iter->table_columns = data->columns;
-
-                    /* Iterator expects column indices to start at 1. Can safely
-                     * modify the column ids, since the array is private to the
-                     * yield operation. */
-                    for (int i = 0; i < iter->column_count; i ++) {
-                        it->table.components[i] = *ecs_vector_get(
-                            table->type, ecs_entity_t, it->table.columns[i]);
-                        it->table.columns[i] ++;
-                    }
+                    set_iter_table(iter, table, cur);
                 } else {
                     /* If a single entity is returned, simply return the
                      * iterator with count 1 and a pointer to the entity id */
                     ecs_assert(var->kind == EcsRuleVarKindEntity, 
                         ECS_INTERNAL_ERROR, NULL);
                     ecs_entity_t e = reg->is.entity;
-                    it->entity = e;
+                    ecs_record_t *record = ecs_eis_get(rule->world, e);
+
+                    /* If an entity is not stored in a table, it could not have
+                     * been matched by anything */
+                    ecs_assert(record != NULL, ECS_INTERNAL_ERROR, NULL);
+                    set_iter_table(iter, record->table, cur);
                     iter->count = 1;
-                    iter->entities = &it->entity;
+
+                    bool is_monitored;
+                    iter->offset = ecs_record_to_row(
+                        record->row, &is_monitored);
                 }
             }
 

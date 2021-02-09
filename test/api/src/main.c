@@ -25,10 +25,17 @@ void Rules_2_fact_pairs_1_false(void);
 void Rules_2_fact_pairs_false(void);
 void Rules_find_1_pair(void);
 void Rules_find_2_pairs(void);
+void Rules_find_w_pred_var(void);
+void Rules_find_w_pred_var_explicit_subject(void);
 void Rules_find_1_pair_w_object_var(void);
 void Rules_find_2_pairs_w_object_var(void);
 void Rules_find_1_pair_w_pred_var(void);
 void Rules_find_2_pairs_w_pred_var(void);
+void Rules_find_cyclic_pairs(void);
+void Rules_join_by_object(void);
+void Rules_join_by_predicate(void);
+void Rules_find_transitive(void);
+void Rules_find_transitive_instances(void);
 
 // Testsuite 'New'
 void New_setup(void);
@@ -1583,6 +1590,14 @@ bake_test_case Rules_testcases[] = {
         Rules_find_2_pairs
     },
     {
+        "find_w_pred_var",
+        Rules_find_w_pred_var
+    },
+    {
+        "find_w_pred_var_explicit_subject",
+        Rules_find_w_pred_var_explicit_subject
+    },
+    {
         "find_1_pair_w_object_var",
         Rules_find_1_pair_w_object_var
     },
@@ -1597,6 +1612,26 @@ bake_test_case Rules_testcases[] = {
     {
         "find_2_pairs_w_pred_var",
         Rules_find_2_pairs_w_pred_var
+    },
+    {
+        "find_cyclic_pairs",
+        Rules_find_cyclic_pairs
+    },
+    {
+        "join_by_object",
+        Rules_join_by_object
+    },
+    {
+        "join_by_predicate",
+        Rules_join_by_predicate
+    },
+    {
+        "find_transitive",
+        Rules_find_transitive
+    },
+    {
+        "find_transitive_instances",
+        Rules_find_transitive_instances
     }
 };
 
@@ -7158,7 +7193,7 @@ static bake_test_suite suites[] = {
         "Rules",
         NULL,
         NULL,
-        20,
+        27,
         Rules_testcases
     },
     {

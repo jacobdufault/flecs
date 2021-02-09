@@ -31,10 +31,17 @@
                 "2_fact_pairs_false",
                 "find_1_pair",
                 "find_2_pairs",
+                "find_w_pred_var",
+                "find_w_pred_var_explicit_subject",
                 "find_1_pair_w_object_var",
                 "find_2_pairs_w_object_var",
                 "find_1_pair_w_pred_var",
-                "find_2_pairs_w_pred_var"
+                "find_2_pairs_w_pred_var",
+                "find_cyclic_pairs",
+                "join_by_object",
+                "join_by_predicate",
+                "find_transitive",
+                "find_transitive_instances"
             ]
         }, {
             "id": "New",
