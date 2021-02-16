@@ -300,9 +300,11 @@ int ecs_plecs_from_file(
     /* Load contents in memory */
     content = ecs_os_malloc(bytes + 1);
     size = (size_t)bytes;
-    if (!(size = fread(content, 1, size, file))) {
+    if (!(size = fread(content, 1, size, file)) && bytes) {
         ecs_err("%s: read zero bytes instead of %d", filename, size);
         ecs_os_free(content);
+        content = NULL;
+        goto error;
     } else {
         content[size] = '\0';
     }

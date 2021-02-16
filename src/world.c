@@ -778,6 +778,8 @@ bool ecs_enable_locking(
     ecs_world_t *world,
     bool enable)
 {
+    ecs_assert( ecs_os_has_threading(), ECS_INVALID_PARAMETER, NULL);
+
     if (enable) {
         if (!world->locking_enabled) {
             world->mutex = ecs_os_mutex_new();
@@ -800,6 +802,7 @@ bool ecs_enable_locking(
 void ecs_lock(
     ecs_world_t *world)
 {
+    ecs_assert( ecs_os_has_threading(), ECS_INVALID_PARAMETER, NULL);
     ecs_assert(world->locking_enabled, ECS_INVALID_PARAMETER, NULL);
     ecs_os_mutex_lock(world->mutex);
 }
@@ -807,6 +810,7 @@ void ecs_lock(
 void ecs_unlock(
     ecs_world_t *world)
 {
+    ecs_assert( ecs_os_has_threading(), ECS_INVALID_PARAMETER, NULL);
     ecs_assert(world->locking_enabled, ECS_INVALID_PARAMETER, NULL);
     ecs_os_mutex_unlock(world->mutex);
 }
@@ -814,6 +818,7 @@ void ecs_unlock(
 void ecs_begin_wait(
     ecs_world_t *world)
 {
+    ecs_assert( ecs_os_has_threading(), ECS_INVALID_PARAMETER, NULL);
     ecs_assert(world->locking_enabled, ECS_INVALID_PARAMETER, NULL);
     ecs_os_mutex_lock(world->thr_sync);
     ecs_os_cond_wait(world->thr_cond, world->thr_sync);
@@ -822,6 +827,7 @@ void ecs_begin_wait(
 void ecs_end_wait(
     ecs_world_t *world)
 {
+    ecs_assert( ecs_os_has_threading(), ECS_INVALID_PARAMETER, NULL);
     ecs_assert(world->locking_enabled, ECS_INVALID_PARAMETER, NULL);
     ecs_os_mutex_unlock(world->thr_sync);
 }
