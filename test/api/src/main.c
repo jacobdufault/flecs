@@ -39,6 +39,8 @@ void Rules_find_transitive(void);
 void Rules_find_transitive_2_branches(void);
 void Rules_find_transitive_subtree(void);
 void Rules_find_transitive_instances(void);
+void Rules_same_pred_obj(void);
+void Rules_same_pred_obj_explicit_subject(void);
 
 // Testsuite 'New'
 void New_setup(void);
@@ -1647,6 +1649,14 @@ bake_test_case Rules_testcases[] = {
     {
         "find_transitive_instances",
         Rules_find_transitive_instances
+    },
+    {
+        "same_pred_obj",
+        Rules_same_pred_obj
+    },
+    {
+        "same_pred_obj_explicit_subject",
+        Rules_same_pred_obj_explicit_subject
     }
 };
 
@@ -7208,7 +7218,7 @@ static bake_test_suite suites[] = {
         "Rules",
         NULL,
         NULL,
-        30,
+        32,
         Rules_testcases
     },
     {

@@ -1110,3 +1110,54 @@ void Rules_find_transitive_instances() {
 
     ecs_fini(world);
 }
+
+void Rules_same_pred_obj() {
+    ecs_world_t *world = ecs_init();
+
+    ECS_TAG(world, Foo);
+    ECS_TAG(world, Bar);
+
+    ecs_entity_t e1 = ecs_new_id(world);
+    ecs_entity_t e2 = ecs_new_id(world);
+
+    ecs_entity_t t1 = ecs_trait(Bar, Foo);
+    ecs_entity_t t2 = ecs_trait(Foo, Foo);
+
+    ecs_add_entity(world, e1, t1);
+    ecs_add_entity(world, e2, t2);
+
+    ecs_rule_t *r = ecs_rule_new(world, "X(., X)");
+    test_assert(r != NULL);
+
+    ecs_iter_t it = ecs_rule_iter(r);
+
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 1);
+    test_int(it.entities[0], e2);
+
+    test_assert(!ecs_rule_next(&it));
+
+    ecs_fini(world);
+}
+
+void Rules_same_pred_obj_explicit_subject() {
+    ecs_world_t *world = ecs_init();
+
+    ECS_TAG(world, Foo);
+    ECS_TAG(world, Bar);
+
+    ECS_ENTITY(world, Ent, 0);
+
+    ecs_entity_t t1 = ecs_trait(Bar, Foo);
+
+    ecs_add_entity(world, Ent, t1);
+
+    ecs_rule_t *r = ecs_rule_new(world, "X(Ent, X)");
+    test_assert(r != NULL);
+
+    ecs_iter_t it = ecs_rule_iter(r);
+
+    test_assert(!ecs_rule_next(&it));
+
+    ecs_fini(world);
+}

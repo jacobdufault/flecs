@@ -44,7 +44,9 @@
                 "find_transitive",
                 "find_transitive_2_branches",
                 "find_transitive_subtree",
-                "find_transitive_instances"
+                "find_transitive_instances",
+                "same_pred_obj",
+                "same_pred_obj_explicit_subject"
             ]
         }, {
             "id": "New",
