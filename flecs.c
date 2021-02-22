@@ -9011,9 +9011,11 @@ int ecs_plecs_from_file(
     /* Load contents in memory */
     content = ecs_os_malloc(bytes + 1);
     size = (size_t)bytes;
-    if (!(size = fread(content, 1, size, file))) {
+    if (!(size = fread(content, 1, size, file)) && bytes) {
         ecs_err("%s: read zero bytes instead of %d", filename, size);
         ecs_os_free(content);
+        content = NULL;
+        goto error;
     } else {
         content[size] = '\0';
     }
@@ -12157,6 +12159,8 @@ bool ecs_enable_locking(
     ecs_world_t *world,
     bool enable)
 {
+    ecs_assert( ecs_os_has_threading(), ECS_INVALID_PARAMETER, NULL);
+
     if (enable) {
         if (!world->locking_enabled) {
             world->mutex = ecs_os_mutex_new();
@@ -12179,6 +12183,7 @@ bool ecs_enable_locking(
 void ecs_lock(
     ecs_world_t *world)
 {
+    ecs_assert( ecs_os_has_threading(), ECS_INVALID_PARAMETER, NULL);
     ecs_assert(world->locking_enabled, ECS_INVALID_PARAMETER, NULL);
     ecs_os_mutex_lock(world->mutex);
 }
@@ -12186,6 +12191,7 @@ void ecs_lock(
 void ecs_unlock(
     ecs_world_t *world)
 {
+    ecs_assert( ecs_os_has_threading(), ECS_INVALID_PARAMETER, NULL);
     ecs_assert(world->locking_enabled, ECS_INVALID_PARAMETER, NULL);
     ecs_os_mutex_unlock(world->mutex);
 }
@@ -12193,6 +12199,7 @@ void ecs_unlock(
 void ecs_begin_wait(
     ecs_world_t *world)
 {
+    ecs_assert( ecs_os_has_threading(), ECS_INVALID_PARAMETER, NULL);
     ecs_assert(world->locking_enabled, ECS_INVALID_PARAMETER, NULL);
     ecs_os_mutex_lock(world->thr_sync);
     ecs_os_cond_wait(world->thr_cond, world->thr_sync);
@@ -12201,6 +12208,7 @@ void ecs_begin_wait(
 void ecs_end_wait(
     ecs_world_t *world)
 {
+    ecs_assert( ecs_os_has_threading(), ECS_INVALID_PARAMETER, NULL);
     ecs_assert(world->locking_enabled, ECS_INVALID_PARAMETER, NULL);
     ecs_os_mutex_unlock(world->thr_sync);
 }
@@ -13436,7 +13444,7 @@ uint8_t get_variable_depth(
     int recur);
 
 static
-uint8_t trace_object(
+uint8_t crawl_variable(
     ecs_rule_t *rule,
     ecs_rule_var_t *var,
     ecs_rule_var_t *root,
@@ -13453,18 +13461,23 @@ uint8_t trace_object(
         ecs_rule_var_t 
         *pred = column_pred(rule, column),
         *subj = column_subj(rule, column),
-        *obj = column_obj(rule, column); 
+        *obj = column_obj(rule, column);
 
-        if (obj != var) {
+        /* Variable must at least appear once in term */
+        if (var != pred && var != subj && var != obj) {
             continue;
         }
 
-        if (pred && !pred->marked) {
+        if (pred && pred != var && !pred->marked) {
             get_variable_depth(rule, pred, root, recur + 1);
         }
 
-        if (subj && !subj->marked) {
+        if (subj && subj != var && !subj->marked) {
             get_variable_depth(rule, subj, root, recur + 1);
+        }
+
+        if (obj && obj != var && !obj->marked) {
+            get_variable_depth(rule, obj, root, recur + 1);
         }
     }
 
@@ -13478,15 +13491,18 @@ uint8_t get_depth_from_var(
     ecs_rule_var_t *root,
     int recur)
 {
-    /* If variable is the root, return its depth */
+    /* If variable is the root or if depth has been set, return depth + 1 */
     if (var == root || var->depth != UINT8_MAX) {
         return var->depth + 1;
     }
 
+    /* Variable is already being evaluated, so this indicates a cycle. Stop */
     if (var->marked) {
         return 0;
     }
     
+    /* Variable is not yet being evaluated and depth has not yet been set. 
+     * Calculate depth. */
     uint8_t depth = get_variable_depth(rule, var, root, recur + 1);
     if (depth == UINT8_MAX) {
         return depth;
@@ -13597,23 +13613,31 @@ uint8_t get_variable_depth(
     /* Dependencies are calculated from subject to (pred, obj). If there were
      * subjects that are only related by object (like (X, Y), (Z, Y)) it is
      * possible that those have not yet been found yet. To make sure those 
-     * variables are found, loop again & follow object links */
+     * variables are found, loop again & follow predicate & object links */
     for (i = 0; i < count; i ++) {
         ecs_sig_column_t *column = &columns[i];
 
         ecs_rule_var_t 
         *subj = column_subj(rule, column),
+        *pred = column_pred(rule, column),
         *obj = column_obj(rule, column);
 
+        /* Only evaluate pred & obj for current subject. This ensures that we
+         * won't evaluate variables that are unreachable from the root. This
+         * must be detected as unconstrained variables are not allowed. */
         if (subj != var) {
             continue;
         }
 
-        trace_object(rule, subj, root, recur);
+        crawl_variable(rule, subj, root, recur);
+
+        if (pred && pred != var) {
+            crawl_variable(rule, pred, root, recur);
+        }
 
         if (obj && obj != var) {
-            trace_object(rule, obj, root, recur);
-        }
+            crawl_variable(rule, obj, root, recur);
+        }        
     }
 
     return var->depth;
@@ -13754,6 +13778,16 @@ int scan_variables(
 
     ecs_rule_var_t *root = &rule->variables[root_var];
     root->depth = get_variable_depth(rule, root, root, 0);
+
+    /* Verify that there are no unconstrained variables. Unconstrained variables
+     * are variables that are unreachable from the root. */
+    for (int i = 0; i < rule->subject_variable_count; i ++) {
+        if (rule->variables[i].depth == UINT8_MAX) {
+            rule_error(rule, "unconstrained variable '%s'", 
+                rule->variables[i].name);
+            goto error;
+        }
+    }
 
     /* Step 4: order variables by depth, followed by occurrence. The variable
      * array will later be used to lead the iteration over the columns, and
@@ -14386,6 +14420,8 @@ bool eval_follow(
     ecs_table_record_t *table_record = NULL;
     ecs_rule_reg_t *regs = get_registers(it, op_index);
 
+    printf("%d: Follow\n", op_ctx->sp);
+
     /* Get register indices for output */
     int32_t sp, row;
     uint8_t r = op->r_out;
@@ -14420,56 +14456,61 @@ bool eval_follow(
         regs[r].is.table = frame->table = table_record->table;
         frame->row = 0;
 
+                printf("Yield [%s] (sp = %d, index = %d, count = %d, row = %d)\n",
+                    ecs_type_str(world, frame->table->type),
+                    op_ctx->sp,
+                    frame->with_ctx.table_index,
+                    ecs_sparse_count(op_ctx->stack[op_ctx->sp].with_ctx.table_set),
+                    frame->row);
+
         return true;
     }
 
-    sp = op_ctx->sp;
-    frame = &op_ctx->stack[sp];
-    table = frame->table;
-    table_set = frame->with_ctx.table_set;
-    row = frame->row;
-
     do {
-        if (!table) {
-            sp = -- op_ctx->sp;
-            if (sp <= 0) {
-                return false;
-            }
-
-            frame = &op_ctx->stack[sp];
-            table = frame->table;
-            table_set = frame->with_ctx.table_set;
-            row = frame->row;
-        }        
-
-        /* Must have a table at this point, either the first table or from the
-        * previous frame. */
-        ecs_assert(table != NULL, ECS_INTERNAL_ERROR, NULL);
-
-        /* Table must be non-empty, or it wouldn't have been returned */
-        ecs_assert(ecs_table_count(table) > 0, ECS_INTERNAL_ERROR, NULL);        
+        sp = op_ctx->sp;
+        frame = &op_ctx->stack[sp];
+        table = frame->table;
+        table_set = frame->with_ctx.table_set;
+        row = frame->row;
 
         /* If row exceeds number of elements in table, find next table in frame that
          * still has entities */
         while ((sp >= 0) && (row >= ecs_table_count(table))) {
             table_record = find_next_table(table_set, &frame->with_ctx);
+            printf("%d: find next table: %p (%p = tables = %d, index = %d)\n", 
+                sp, table_record, table_set, ecs_sparse_count(table_set), frame->with_ctx.table_index);
 
             if (table_record) {
                 table = frame->table = table_record->table;
                 ecs_assert(table != NULL, ECS_INTERNAL_ERROR, NULL);
                 row = frame->row = 0;
+                regs[r].is.table = table;
+                printf("Yield [%s] (sp = %d, index = %d, count = %d, row = %d)\n",
+                    ecs_type_str(world, frame->table->type),
+                    op_ctx->sp,
+                    frame->with_ctx.table_index,
+                    ecs_sparse_count(op_ctx->stack[op_ctx->sp].with_ctx.table_set),
+                    frame->row);
+                return true;
             } else {
+                printf("decrease stack\n");
                 sp = -- op_ctx->sp;
                 if (sp < 0) {
                     /* If none of the frames yielded anything, no more data */
+                    printf("#2 depleted\n");
                     return false;
                 }
                 frame = &op_ctx->stack[sp];
                 table = frame->table;
                 table_set = frame->with_ctx.table_set;
                 row = ++ frame->row;
+
+                ecs_assert(table != NULL, ECS_INTERNAL_ERROR, NULL);
+                ecs_assert(table_set != NULL, ECS_INTERNAL_ERROR, NULL);
             }
         }
+
+        printf("%d: table = [%s], count = %d, row = %d\n", sp, ecs_type_str(world, table->type), ecs_table_count(table), row);
 
         int32_t row_count = ecs_table_count(table);
 
@@ -14493,13 +14534,13 @@ bool eval_follow(
 
             /* Find table set for expression */
             table = NULL;
-            table_set = frame->with_ctx.table_set = ecs_map_get_ptr(
+            table_set = ecs_map_get_ptr(
                 world->store.table_index, ecs_sparse_t*, look_for);
 
             /* If table set is found, find first non-empty table */
             if (table_set) {
                 ecs_rule_follow_frame_t *new_frame = &op_ctx->stack[sp + 1];
-                new_frame->with_ctx.table_set = NULL;
+                new_frame->with_ctx.table_set = table_set;
                 new_frame->with_ctx.table_index = -1;
                 table_record = find_next_table(table_set, &new_frame->with_ctx);
 
@@ -14514,11 +14555,17 @@ bool eval_follow(
 
             /* If no table was found for the current entity, advance row */
             if (!table) {
-                row = frame->row ++;
+                row = ++ frame->row;
             }
         } while (!table && row < row_count);
-
     } while (!table);
+
+    printf("Yield [%s] (sp = %d, index = %d, count = %d, row = %d)\n", 
+        ecs_type_str(world, table->type),
+        op_ctx->sp,
+        op_ctx->stack[op_ctx->sp].with_ctx.table_index,
+        ecs_sparse_count(op_ctx->stack[op_ctx->sp].with_ctx.table_set),
+        op_ctx->stack[op_ctx->sp].row);
 
     regs[r].is.table = table;  
 
@@ -14937,6 +14984,10 @@ void push_registers(
     int32_t cur,
     int32_t next)
 {
+    if (!it->rule->variable_count) {
+        return;
+    }
+
     ecs_rule_reg_t *src_regs = get_registers(it, cur);
     ecs_rule_reg_t *dst_regs = get_registers(it, next);
 
@@ -14954,6 +15005,10 @@ void push_columns(
     int32_t cur,
     int32_t next)
 {
+    if (!it->rule->column_count) {
+        return;
+    }
+
     int32_t *src_cols = get_columns(it, cur);
     int32_t *dst_cols = get_columns(it, next);
 

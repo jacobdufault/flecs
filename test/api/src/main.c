@@ -34,7 +34,10 @@ void Rules_find_2_pairs_w_pred_var(void);
 void Rules_find_cyclic_pairs(void);
 void Rules_join_by_object(void);
 void Rules_join_by_predicate(void);
+void Rules_join_by_predicate_from_subject(void);
 void Rules_find_transitive(void);
+void Rules_find_transitive_2_branches(void);
+void Rules_find_transitive_subtree(void);
 void Rules_find_transitive_instances(void);
 
 // Testsuite 'New'
@@ -1626,8 +1629,20 @@ bake_test_case Rules_testcases[] = {
         Rules_join_by_predicate
     },
     {
+        "join_by_predicate_from_subject",
+        Rules_join_by_predicate_from_subject
+    },
+    {
         "find_transitive",
         Rules_find_transitive
+    },
+    {
+        "find_transitive_2_branches",
+        Rules_find_transitive_2_branches
+    },
+    {
+        "find_transitive_subtree",
+        Rules_find_transitive_subtree
     },
     {
         "find_transitive_instances",
@@ -7193,7 +7208,7 @@ static bake_test_suite suites[] = {
         "Rules",
         NULL,
         NULL,
-        27,
+        30,
         Rules_testcases
     },
     {

@@ -40,7 +40,10 @@
                 "find_cyclic_pairs",
                 "join_by_object",
                 "join_by_predicate",
+                "join_by_predicate_from_subject",
                 "find_transitive",
+                "find_transitive_2_branches",
+                "find_transitive_subtree",
                 "find_transitive_instances"
             ]
         }, {

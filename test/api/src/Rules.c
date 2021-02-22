@@ -8,6 +8,7 @@ void test_1_comp(const char *expr) {
     ECS_COMPONENT(world, Velocity);
 
     ecs_rule_t *r = ecs_rule_new(world, expr);
+    test_assert(r != NULL);
 
     ecs_entity_t e1 = ecs_set(world, 0, Position, {10, 20});
     ecs_entity_t e2 = ecs_set(world, 0, Position, {30, 40});
@@ -58,6 +59,7 @@ void test_2_comp(const char *expr) {
     ECS_COMPONENT(world, Mass);
 
     ecs_rule_t *r = ecs_rule_new(world, "Position, Velocity");
+    test_assert(r != NULL);
 
     ecs_entity_t e1 = ecs_set(world, 0, Position, {10, 20});
     ecs_set(world, e1, Velocity, {1, 2});
@@ -127,10 +129,26 @@ void Rules_2_comp_explicit_subject() {
 
 const char *rules =
 "Transitive(IsA)\n"
+"IsA(CelestialBody, Location)\n"
+"IsA(CelestialBody, Thing)\n"
+"IsA(Planet, CelestialBody)\n"
+"IsA(Moon, CelestialBody)\n"
+"IsA(Person, Thing)\n"
+"IsA(Character, Person)\n"
 "IsA(Human, Character)\n"
 "IsA(Robot, Character)\n"
 "IsA(Creature, Character)\n"
 "IsA(Wookie, Creature)\n"
+"IsA(Machine, Thing)\n"
+"IsA(Vehicle, Machine)\n"
+"IsA(Transport, Vehicle)\n"
+"IsA(SpaceShip, Transport)\n"
+"IsA(Speeder, Transport)\n"
+"IsA(CorellianLightFreighter, SpaceShip)\n"
+"IsA(MilleniumFalcon, CorellianLightFreighter)\n"
+"Faction(XWing, Rebels)\n"
+"IsA(XWing, SpaceShip)\n"
+"IsA(YWing, SpaceShip)\n"
 "Human(Luke)\n"
 "Human(Leia)\n"
 "Human(Rey)\n"
@@ -171,6 +189,8 @@ void Rules_1_fact_true() {
     test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
 
     ecs_rule_t *r = ecs_rule_new(world, "Jedi(Yoda)");
+    test_assert(r != NULL);
+
     ecs_iter_t it = ecs_rule_iter(r);
     test_assert(ecs_rule_next(&it));
     test_int(it.count, 0);
@@ -185,6 +205,8 @@ void Rules_1_fact_false() {
     test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
 
     ecs_rule_t *r = ecs_rule_new(world, "Sith(Yoda)");
+    test_assert(r != NULL);
+
     ecs_iter_t it = ecs_rule_iter(r);
     test_assert(!ecs_rule_next(&it));
 
@@ -197,6 +219,8 @@ void Rules_2_facts_true() {
     test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
 
     ecs_rule_t *r = ecs_rule_new(world, "Jedi(Yoda), Sith(DarthVader)");
+    test_assert(r != NULL);
+
     ecs_iter_t it = ecs_rule_iter(r);
     test_assert(ecs_rule_next(&it));
     test_int(it.count, 0);
@@ -211,6 +235,8 @@ void Rules_2_facts_1_false() {
     test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
 
     ecs_rule_t *r = ecs_rule_new(world, "Sith(Yoda), Sith(DarthVader)");
+    test_assert(r != NULL);
+
     ecs_iter_t it = ecs_rule_iter(r);
     test_assert(!ecs_rule_next(&it));
 
@@ -223,6 +249,8 @@ void Rules_2_facts_false() {
     test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
 
     ecs_rule_t *r = ecs_rule_new(world, "Sith(Yoda), Jedi(DarthVader)");
+    test_assert(r != NULL);
+
     ecs_iter_t it = ecs_rule_iter(r);
     test_assert(!ecs_rule_next(&it));
 
@@ -235,6 +263,8 @@ void Rules_1_fact_pair_true() {
     test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
 
     ecs_rule_t *r = ecs_rule_new(world, "HomePlanet(Yoda, Dagobah)");
+    test_assert(r != NULL);
+
     ecs_iter_t it = ecs_rule_iter(r);
     test_assert(ecs_rule_next(&it));
     test_int(it.count, 0);
@@ -249,6 +279,8 @@ void Rules_1_fact_pair_false() {
     test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
 
     ecs_rule_t *r = ecs_rule_new(world, "HomePlanet(Yoda, Tatooine)");
+    test_assert(r != NULL);
+    
     ecs_iter_t it = ecs_rule_iter(r);
     test_assert(!ecs_rule_next(&it));
 
@@ -261,6 +293,8 @@ void Rules_2_fact_pairs_true() {
     test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
 
     ecs_rule_t *r = ecs_rule_new(world, "HomePlanet(Yoda, Dagobah), HomePlanet(Luke, Tatooine)");
+    test_assert(r != NULL);
+
     ecs_iter_t it = ecs_rule_iter(r);
     test_assert(ecs_rule_next(&it));
     test_int(it.count, 0);
@@ -275,6 +309,8 @@ void Rules_2_fact_pairs_1_false() {
     test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
 
     ecs_rule_t *r = ecs_rule_new(world, "HomePlanet(Yoda, Dagobah), HomePlanet(Luke, Mustafar)");
+    test_assert(r != NULL);
+
     ecs_iter_t it = ecs_rule_iter(r);
     test_assert(!ecs_rule_next(&it));
 
@@ -287,6 +323,8 @@ void Rules_2_fact_pairs_false() {
     test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
 
     ecs_rule_t *r = ecs_rule_new(world, "HomePlanet(Yoda, Tatooine), HomePlanet(Luke, Mustafar)");
+    test_assert(r != NULL);
+
     ecs_iter_t it = ecs_rule_iter(r);
     test_assert(!ecs_rule_next(&it));
 
@@ -299,6 +337,8 @@ void Rules_find_1_pair() {
     test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
 
     ecs_rule_t *r = ecs_rule_new(world, "HomePlanet(., Tatooine)");
+    test_assert(r != NULL);
+
     ecs_iter_t it = ecs_rule_iter(r);
     
     test_assert(ecs_rule_next(&it));
@@ -323,6 +363,8 @@ void Rules_find_2_pairs() {
     test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
 
     ecs_rule_t *r = ecs_rule_new(world, "HomePlanet(., Tatooine), Enemy(., Palpatine)");
+    test_assert(r != NULL);
+
     ecs_iter_t it = ecs_rule_iter(r);
 
     test_assert(ecs_rule_next(&it));
@@ -367,6 +409,8 @@ void Rules_find_w_pred_var() {
     test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
 
     ecs_rule_t *r = ecs_rule_new(world, "X(.), Jedi(.)");
+    test_assert(r != NULL);
+
     int32_t x_var = ecs_rule_find_variable(r, "X");
     test_assert(x_var != -1);
 
@@ -455,6 +499,8 @@ void Rules_find_w_pred_var_explicit_subject() {
     test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
 
     ecs_rule_t *r = ecs_rule_new(world, "X(Luke)");
+    test_assert(r != NULL);
+
     int32_t x_var = ecs_rule_find_variable(r, "X");
     test_assert(x_var != -1);
 
@@ -483,6 +529,8 @@ void Rules_find_1_pair_w_object_var() {
     test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
 
     ecs_rule_t *r = ecs_rule_new(world, "HomePlanet(., X)");
+    test_assert(r != NULL);
+
     int32_t x_var = ecs_rule_find_variable(r, "X");
     test_assert(x_var != -1);
 
@@ -529,6 +577,8 @@ void Rules_find_2_pairs_w_object_var() {
     test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
 
     ecs_rule_t *r = ecs_rule_new(world, "HomePlanet(., X), Enemy(., Y)");
+    test_assert(r != NULL);
+
     int32_t x_var = ecs_rule_find_variable(r, "X");
     test_assert(x_var != -1);
     int32_t y_var = ecs_rule_find_variable(r, "Y");
@@ -587,6 +637,8 @@ void Rules_find_1_pair_w_pred_var() {
     test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
 
     ecs_rule_t *r = ecs_rule_new(world, "X(., Tatooine)");
+    test_assert(r != NULL);
+
     int32_t x_var = ecs_rule_find_variable(r, "X");
     test_assert(x_var != -1);
 
@@ -621,6 +673,8 @@ void Rules_find_2_pairs_w_pred_var() {
     test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
 
     ecs_rule_t *r = ecs_rule_new(world, "X(., Tatooine), Y(., Palpatine)");
+    test_assert(r != NULL);
+
     int32_t x_var = ecs_rule_find_variable(r, "X");
     test_assert(x_var != -1);
     int32_t y_var = ecs_rule_find_variable(r, "Y");
@@ -655,6 +709,8 @@ void Rules_find_cyclic_pairs() {
     test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
 
     ecs_rule_t *r = ecs_rule_new(world, "Likes(., X), Likes(X, .)");
+    test_assert(r != NULL);
+
     int32_t x_var = ecs_rule_find_variable(r, "X");
     test_assert(x_var != -1);
 
@@ -683,6 +739,8 @@ void Rules_join_by_object() {
     test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
 
     ecs_rule_t *r = ecs_rule_new(world, "Parent(., X), Parent(Y, X)");
+    test_assert(r != NULL);
+
     int32_t x_var = ecs_rule_find_variable(r, "X");
     test_assert(x_var != -1);
     int32_t y_var = ecs_rule_find_variable(r, "Y");
@@ -749,6 +807,8 @@ void Rules_join_by_predicate() {
     test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
 
     ecs_rule_t *r = ecs_rule_new(world, "X(., DarthVader), X(Y, DarthVader)");
+    test_assert(r != NULL);
+
     int32_t x_var = ecs_rule_find_variable(r, "X");
     test_assert(x_var != -1);
     int32_t y_var = ecs_rule_find_variable(r, "Y");
@@ -825,12 +885,47 @@ void Rules_join_by_predicate() {
     ecs_fini(world);
 }
 
+void Rules_join_by_predicate_from_subject() {
+    ecs_world_t *world = ecs_init();
+
+    test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
+
+    ecs_rule_t *r = ecs_rule_new(world, "Transitive(.), .(X, Character)");
+    test_assert(r != NULL);
+
+    int32_t x_var = ecs_rule_find_variable(r, "X");
+    test_assert(x_var != -1);
+
+    ecs_iter_t it = ecs_rule_iter(r);
+
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 1);
+    test_str(ecs_get_name(world, it.entities[0]), "IsA");
+    test_var(&it, x_var, "Human");
+
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 1);
+    test_str(ecs_get_name(world, it.entities[0]), "IsA");
+    test_var(&it, x_var, "Robot");    
+
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 1);
+    test_str(ecs_get_name(world, it.entities[0]), "IsA");
+    test_var(&it, x_var, "Creature");
+
+    test_assert(!ecs_rule_next(&it));
+
+    ecs_fini(world);
+}
+
 void Rules_find_transitive() {
     ecs_world_t *world = ecs_init();
 
     test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
 
     ecs_rule_t *r = ecs_rule_new(world, "IsA(., Character)");
+    test_assert(r != NULL);
+
     ecs_iter_t it = ecs_rule_iter(r);
 
     test_assert(ecs_rule_next(&it));
@@ -846,12 +941,111 @@ void Rules_find_transitive() {
     ecs_fini(world);
 }
 
+void Rules_find_transitive_2_branches() {
+    ecs_world_t *world = ecs_init();
+
+    test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
+
+    ecs_rule_t *r = ecs_rule_new(world, "IsA(., Thing)");
+    test_assert(r != NULL);
+
+    ecs_iter_t it = ecs_rule_iter(r);
+
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 1);
+    test_str(ecs_get_name(world, it.entities[0]), "CelestialBody");
+
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 2);
+    test_str(ecs_get_name(world, it.entities[0]), "Planet");
+    test_str(ecs_get_name(world, it.entities[1]), "Moon");
+
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 2);
+    test_str(ecs_get_name(world, it.entities[0]), "Person");
+    test_str(ecs_get_name(world, it.entities[1]), "Machine");
+
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 1);
+    test_str(ecs_get_name(world, it.entities[0]), "Character");
+
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 3);
+    test_str(ecs_get_name(world, it.entities[0]), "Human");
+    test_str(ecs_get_name(world, it.entities[1]), "Robot");
+    test_str(ecs_get_name(world, it.entities[2]), "Creature");
+
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 1);
+    test_str(ecs_get_name(world, it.entities[0]), "Wookie");
+
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 1);
+    test_str(ecs_get_name(world, it.entities[0]), "Vehicle");
+
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 1);
+    test_str(ecs_get_name(world, it.entities[0]), "Transport");
+
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 2);
+    test_str(ecs_get_name(world, it.entities[0]), "SpaceShip");
+    test_str(ecs_get_name(world, it.entities[1]), "Speeder");
+
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 2);
+    test_str(ecs_get_name(world, it.entities[0]), "CorellianLightFreighter");
+    test_str(ecs_get_name(world, it.entities[1]), "YWing");
+
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 1);
+    test_str(ecs_get_name(world, it.entities[0]), "MilleniumFalcon");
+
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 1);
+    test_str(ecs_get_name(world, it.entities[0]), "XWing");
+
+    test_assert(!ecs_rule_next(&it));
+
+    ecs_fini(world);
+}
+
+void Rules_find_transitive_subtree() {
+    ecs_world_t *world = ecs_init();
+
+    test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
+
+    ecs_rule_t *r = ecs_rule_new(world, "IsA(., SpaceShip)");
+    test_assert(r != NULL);
+
+    ecs_iter_t it = ecs_rule_iter(r);
+
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 2);
+    test_str(ecs_get_name(world, it.entities[0]), "CorellianLightFreighter");
+    test_str(ecs_get_name(world, it.entities[1]), "YWing");
+
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 1);
+    test_str(ecs_get_name(world, it.entities[0]), "MilleniumFalcon");
+
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 1);
+    test_str(ecs_get_name(world, it.entities[0]), "XWing");
+
+    test_assert(!ecs_rule_next(&it));
+
+    ecs_fini(world);
+}
+
 void Rules_find_transitive_instances() {
     ecs_world_t *world = ecs_init();
 
     test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
 
     ecs_rule_t *r = ecs_rule_new(world, "X, IsA(X, Character)");
+    test_assert(r != NULL);
+
     int32_t x_var = ecs_rule_find_variable(r, "X");
     test_assert(x_var != -1);
 
