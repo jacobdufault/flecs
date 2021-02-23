@@ -39,6 +39,12 @@ void Rules_find_transitive(void);
 void Rules_find_transitive_2_branches(void);
 void Rules_find_transitive_subtree(void);
 void Rules_find_transitive_instances(void);
+void Rules_transitive_fact_false(void);
+void Rules_transitive_fact_true_depth_1(void);
+void Rules_transitive_fact_true_depth_2(void);
+void Rules_transitive_fact_true_depth_3(void);
+void Rules_transitive_fact_true_depth_4(void);
+void Rules_transitive_fact_true_depth_5(void);
 void Rules_same_pred_obj(void);
 void Rules_same_pred_obj_explicit_subject(void);
 
@@ -1649,6 +1655,30 @@ bake_test_case Rules_testcases[] = {
     {
         "find_transitive_instances",
         Rules_find_transitive_instances
+    },
+    {
+        "transitive_fact_false",
+        Rules_transitive_fact_false
+    },
+    {
+        "transitive_fact_true_depth_1",
+        Rules_transitive_fact_true_depth_1
+    },
+    {
+        "transitive_fact_true_depth_2",
+        Rules_transitive_fact_true_depth_2
+    },
+    {
+        "transitive_fact_true_depth_3",
+        Rules_transitive_fact_true_depth_3
+    },
+    {
+        "transitive_fact_true_depth_4",
+        Rules_transitive_fact_true_depth_4
+    },
+    {
+        "transitive_fact_true_depth_5",
+        Rules_transitive_fact_true_depth_5
     },
     {
         "same_pred_obj",
@@ -7218,7 +7248,7 @@ static bake_test_suite suites[] = {
         "Rules",
         NULL,
         NULL,
-        32,
+        38,
         Rules_testcases
     },
     {

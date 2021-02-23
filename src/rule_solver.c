@@ -24,6 +24,7 @@ typedef struct ecs_rule_pair_t {
     uint32_t pred;
     uint32_t obj;
     int8_t reg_mask; /* bit 1 = predicate, bit 2 = object, bit 4 = wildcard */
+    bool transitive; /* Is predicate transitive */
 } ecs_rule_pair_t;
 
 /* Filter for evaluating & reifing types and variables. Filters are created ad-
@@ -38,6 +39,7 @@ typedef struct ecs_rule_filter_t {
 
     bool wildcard; /* Does the filter contain wildcards */
     bool pred_wildcard; /* Is predicate a wildcard */
+    bool obj_wildcard; /* Is object a wildcard */
     bool same_var; /* True if pred & obj are both the same variable */
 
     int16_t hi_var; /* If hi part should be stored in var, this is the var id */
@@ -92,6 +94,9 @@ typedef struct ecs_rule_op_t {
 typedef struct ecs_rule_with_ctx_t {
     ecs_sparse_t *table_set;    /* Currently evaluated table set */
     int32_t table_index;        /* Currently evaluated index in table set */
+
+    ecs_sparse_t *tr_table_set; /* Table set that blanks out object with a 
+                                 * wildcard. Used for transitive queries */
 } ecs_rule_with_ctx_t;
 
 typedef struct ecs_rule_follow_frame_t {
@@ -368,6 +373,15 @@ ecs_rule_pair_t column_to_pair(
     } else {
         /* If the predicate is not a variable, simply store its id. */
         result.pred = pred_id;
+
+        /* Test if predicate is transitive. When evaluating the predicate, this
+         * will also take into account transitive relationships */
+        if (ecs_has_entity(rule->world, pred_id, EcsTransitive)) {
+            /* Transitive queries must have an object */
+            if (column->argc == 2) {
+                result.transitive = true;
+            }
+        }
     }
 
     /* The pair doesn't do anything with the subject (subjects are the things that
@@ -401,12 +415,37 @@ ecs_rule_pair_t column_to_pair(
     return result;
 }
 
+static
+void set_filter_expr_mask(
+    ecs_rule_filter_t *result,
+    ecs_entity_t mask)
+{
+    ecs_entity_t lo = ecs_entity_t_lo(mask);
+    ecs_entity_t hi = ecs_entity_t_hi(mask & ECS_COMPONENT_MASK);
+
+    /* Make sure roles match between expr & eq mask */
+    result->expr_mask = ECS_ROLE_MASK & mask;
+    result->expr_match = ECS_ROLE_MASK & mask;
+
+    /* Set parts that are not wildcards to F's. This ensures that when the
+     * expr mask is AND'd with a type id, only the non-wildcard parts are
+     * set in the id returned by the expression. */
+    result->expr_mask |= 0xFFFFFFFF * (lo != EcsWildcard);
+    result->expr_mask |= ((uint64_t)0xFFFFFFFF << 32) * (hi != EcsWildcard);
+
+    /* Only assign the non-wildcard parts to the id. This is compared with
+     * the result of the AND operation between the expr_mask and id from the
+     * entity's type. If it matches, it means that the non-wildcard parts of
+     * the filter match */
+    result->expr_match |= lo * (lo != EcsWildcard);
+    result->expr_match |= (hi << 32) * (hi != EcsWildcard);
+}
+
 /* When an operation has a pair, it is used to filter its input. This function
  * translates a pair back into an entity id, and in the process substitutes the
  * variables that have already been filled out. It's one of the most important
  * functions, as a lot of the filtering logic depends on having an entity that
- * has all of the reified variables correctly filled out. 
- * This function is in essence the decoder for column_to_pair.*/
+ * has all of the reified variables correctly filled out. */
 static
 ecs_rule_filter_t pair_to_filter(
     ecs_rule_iter_t *it,
@@ -414,12 +453,10 @@ ecs_rule_filter_t pair_to_filter(
 {
     ecs_entity_t pred = pair.pred;
     ecs_entity_t obj = pair.obj;
-    ecs_entity_t mask, expr_mask = 0, expr_match = 0;
-    bool wildcard = false;
-    bool pred_wildcard = false;
-    bool same_var = false;
-    int16_t hi_var = -1;
-    int16_t lo_var = -1;
+    ecs_rule_filter_t result = {
+        .lo_var = -1,
+        .hi_var = -1
+    };
 
     /* Get registers in case we need to resolve ids from registers. Get them
      * from the previous, not the current stack frame as the current operation
@@ -429,70 +466,44 @@ ecs_rule_filter_t pair_to_filter(
     if (pair.reg_mask & RULE_PAIR_OBJECT) {
         obj = regs[obj].is.entity;
         if (obj == EcsWildcard) {
-            wildcard = true;
-            lo_var = pair.obj;
+            result.wildcard = true;
+            result.obj_wildcard = true;
+            result.lo_var = pair.obj;
         }
     }
 
     if (pair.reg_mask & RULE_PAIR_PREDICATE) {
         pred = regs[pred].is.entity;
         if (pred == EcsWildcard) {
-            if (wildcard) {
-                same_var = pair.pred == pair.obj;
+            if (result.wildcard) {
+                result.same_var = pair.pred == pair.obj;
             }
 
-            wildcard = true;
-            pred_wildcard = true;
+            result.wildcard = true;
+            result.pred_wildcard = true;
 
             if (obj) {
-                hi_var = pair.pred;
+                result.hi_var = pair.pred;
             } else {
-                lo_var = pair.pred;
+                result.lo_var = pair.pred;
             }
         }
     }
 
     if (!obj) {
-        mask = pred;
+        result.mask = pred;
     } else {
-        mask = ecs_trait(obj, pred);
+        result.mask = ecs_trait(obj, pred);
     }
 
     /* Construct masks for quick evaluation of a filter. These masks act as a
      * bloom filter that is used to quickly eliminate non-matching elements in
      * an entity's type. */
-    if (wildcard) {
-        ecs_entity_t lo = ecs_entity_t_lo(mask);
-        ecs_entity_t hi = ecs_entity_t_hi(mask & ECS_COMPONENT_MASK);
-
-        /* Make sure roles match between expr & eq mask */
-        expr_mask = ECS_ROLE_MASK & mask;
-        expr_match = ECS_ROLE_MASK & mask;
-
-        /* Set parts that are not wildcards to F's. This ensures that when the
-         * expr mask is AND'd with a type id, only the non-wildcard parts are
-         * set in the id returned by the expression. */
-        expr_mask |= 0xFFFFFFFF * (lo != EcsWildcard);
-        expr_mask |= ((uint64_t)0xFFFFFFFF << 32) * (hi != EcsWildcard);
-
-        /* Only assign the non-wildcard parts to the id. This is compared with
-         * the result of the AND operation between the expr_mask and id from the
-         * entity's type. If it matches, it means that the non-wildcard parts of
-         * the filter match */
-        expr_match |= lo * (lo != EcsWildcard);
-        expr_match |= (hi << 32) * (hi != EcsWildcard);        
+    if (result.wildcard) {
+        set_filter_expr_mask(&result, result.mask);
     }
 
-    return (ecs_rule_filter_t) {
-        .mask = mask,
-        .wildcard = wildcard,
-        .pred_wildcard = pred_wildcard,
-        .same_var = same_var,
-        .expr_mask = expr_mask,
-        .expr_match = expr_match,
-        .hi_var = hi_var,
-        .lo_var = lo_var
-    };
+    return result;
 }
 
 /* This function iterates a type with a provided pair expression, as is returned
@@ -974,27 +985,6 @@ error:
 }
 
 static
-bool is_transitive(
-    ecs_rule_t *rule,
-    ecs_rule_pair_t pair)
-{
-    ecs_world_t *world = rule->world;
-
-    bool transitive = false;
-
-    /* Test if predicate is transitive */
-    if (pair.pred && pair.obj) {
-        /* If predicate is not variable, check if it's transitive */
-        if (!(pair.reg_mask & RULE_PAIR_PREDICATE)) {
-            ecs_entity_t pred_id = pair.pred;
-            transitive = ecs_has_entity(world, pred_id, EcsTransitive);
-        }
-    }
-
-    return transitive;
-}
-
-static
 ecs_rule_op_t* insert_operation(
     ecs_rule_t *rule,
     int32_t column_index)
@@ -1187,11 +1177,12 @@ ecs_rule_t* ecs_rule_new(
            
             /* If the variable was not written yet, insert a select */
             } else {
-                if (is_transitive(result, op->param)) {
+                if (op->param.transitive) {
                     op->kind = EcsRuleFollow;
                 } else {
                     op->kind = EcsRuleSelect;
                 }
+
                 op->has_out = true;
                 op->r_out = var->id;
 
@@ -1579,6 +1570,15 @@ ecs_table_record_t find_next_table(
 }
 
 static
+ecs_sparse_t* find_table_set(
+    ecs_world_t *world,
+    ecs_entity_t mask)
+{
+    return ecs_map_get_ptr(
+        world->store.table_index, ecs_sparse_t*, mask);
+}
+
+static
 bool eval_follow(
     ecs_rule_iter_t *it,
     ecs_rule_op_t *op,
@@ -1607,8 +1607,8 @@ bool eval_follow(
         op_ctx->stack = op_ctx->storage;
         sp = op_ctx->sp = 0;
         frame = &op_ctx->stack[sp];
-        table_set = frame->with_ctx.table_set = ecs_map_get_ptr(
-            world->store.table_index, ecs_sparse_t*, filter.mask);
+        table_set = frame->with_ctx.table_set = find_table_set(
+            world, filter.mask);
         
         /* If no table set could be found for expression, yield nothing */
         if (!table_set) {
@@ -1684,8 +1684,7 @@ bool eval_follow(
 
             /* Find table set for expression */
             table = NULL;
-            table_set = ecs_map_get_ptr(
-                world->store.table_index, ecs_sparse_t*, filter.mask);
+            table_set = find_table_set(world, filter.mask);
 
             /* If table set is found, find first non-empty table */
             if (table_set) {
@@ -1760,8 +1759,7 @@ bool eval_select(
          * in most cases eliminates) any searching that needs to occur in a
          * table type. Tables are also registered under wildcards, which is why
          * this operation can simply use the look_for variable directly */
-        table_set = op_ctx->table_set = ecs_map_get_ptr(
-            world->store.table_index, ecs_sparse_t*, filter.mask);
+        table_set = op_ctx->table_set = find_table_set(world, filter.mask);
     }
 
     /* If no table set was found for queried for entity, there are no results */
@@ -1870,6 +1868,68 @@ ecs_table_t* table_from_reg(
     return NULL;
 }
 
+/* Test if provided object has a transitive relationship with the filter */
+static
+bool with_transitive(
+    ecs_world_t *world,
+    ecs_sparse_t *table_set,
+    ecs_sparse_t *tr_table_set,
+    ecs_entity_t table_obj,
+    ecs_rule_filter_t *filter,
+    ecs_rule_filter_t *tr_filter)
+{
+    ecs_table_t *table = table_from_entity(world, table_obj);
+
+    /* If entity has no table, it has no relationships and can therefore not
+     * have a transitive relationship with the object in the filter */
+    if (!table) {
+        return false;
+    }
+
+    ecs_table_record_t *table_record = ecs_sparse_get_sparse(
+        table_set, ecs_table_record_t, table->id);
+
+    /* If the table of the entity is in the required table set, the relationship
+     * was matched. */
+    if (table_record) {
+        return true;
+    }
+
+    /* If the object does not have a direct transitive relationship with the
+     * required object, keep searching by using the transitive table set. This
+     * set contains all tables that have one or more instances of the transitive
+     * predicate. */
+    table_record = ecs_sparse_get_sparse(
+        tr_table_set, ecs_table_record_t, table->id);
+    
+    /* If no table record was found in the transitive table set, it has no
+     * instances of the transitive predicate and therefore cannot have a
+     * transitive relationship with the object in the filter. */
+    if (!table_record) {
+        return false;
+    }
+
+    /* If a table set is found, loop each instance of the transitive predicate
+     * and search recursively until a transitive relationship has been found */
+    table = table_record->table;
+    ecs_type_t type = table->type;
+    int32_t column = table_record->column;
+
+    do {
+        ecs_entity_t obj = *(ecs_vector_get(type, ecs_entity_t, column));        
+        obj = ecs_entity_t_lo(obj);
+
+        if (with_transitive(world, table_set, tr_table_set, obj, filter, 
+            tr_filter))
+        {
+            return true;
+        }
+    } while ((column = find_next_match(type, column + 1, tr_filter)) != -1);
+    
+    /* No transitive relationship has been found */
+    return false;
+}
+
 /* With operation. The With operation always comes after either the Select or
  * another With operation, and applies additional filters to the table. */
 static
@@ -1900,7 +1960,7 @@ bool eval_with(
 
     int32_t column = -1;
     ecs_table_t *table = NULL;
-    ecs_sparse_t *table_set;    
+    ecs_sparse_t *table_set;
 
     /* If this is a redo, we already looked up the table set */
     if (redo) {
@@ -1913,16 +1973,20 @@ bool eval_with(
         /* The With operation finds the table set that belongs to its pair
          * filter. The table set is a sparse set that provides an O(1) operation
          * to check whether the current table has the required expression. */
-        table_set = op_ctx->table_set = ecs_map_get_ptr(
-            world->store.table_index, ecs_sparse_t*, filter.mask);
+        table_set = op_ctx->table_set = find_table_set(world, filter.mask);
     }
 
-    /* If no table set was found for queried for entity, there are no results */
+    /* If no table set was found for queried for entity, there are no results. 
+     * If this result is a transitive query, the table we're evaluating may not
+     * be in the returned table set. Regardless, if the filter that contains a
+     * transitive predicate does not have any tables associated with it, there
+     * can be no transitive matches for the filter.  */
     if (!table_set) {
         return false;
     }
 
     int32_t *columns = get_columns(it, op_index);
+    int32_t new_column = -1;
 
     /* If this is not a redo, start at the beginning */
     if (!redo) {
@@ -1939,18 +2003,18 @@ bool eval_with(
         table_record = ecs_sparse_get_sparse(
             table_set, ecs_table_record_t, table->id);
 
-        /* If no table record was found, there are no results. */
+        /* If no table record was found, there are no results, unless the 
+         * predicate is transitive. */
         if (!table_record) {
-            return false;
-        }
-        
-        ecs_assert(table == table_record->table, ECS_INTERNAL_ERROR, NULL);
+            if (!pair.transitive && !filter.obj_wildcard) {
+                return false;
+            }
+        } else {
+            ecs_assert(table == table_record->table, ECS_INTERNAL_ERROR, NULL);
 
-        /* Set current column to first occurrence of queried for entity */
-        column = columns[op->column] = find_next_match(
-            table->type, table_record->column, &filter);
-        if (column == -1) {
-            return false;
+            /* Set current column to first occurrence of queried for entity */
+            column = table_record->column;
+            new_column = find_next_match(table->type, column, &filter);
         }
     
     /* If this is a redo, progress to the next match */
@@ -1967,16 +2031,82 @@ bool eval_with(
              * array keeps track of the state for each With operation, so that
              * even after redoing a With, the search doesn't have to start from
              * the beginning. */
-            column = columns[op->column];
-            column = find_next_match(table->type, column + 1, &filter);
-            columns[op->column] = column;
+            column = columns[op->column] + 1;
+            new_column = find_next_match(table->type, column, &filter);
         }
+    }
 
-        /* If no next match was found for this table, no more data */
-        if (column == -1) {
+    /* If no next match was found for this table, no more data */
+    if (new_column == -1) {
+        /* .. unless this is a transitive query, in which case we need to find a
+         * matching column for the transitive mask (see above) and check if the
+         * object in the table has a transitive relationship with the object in
+         * the filter. */
+        if (!filter.obj_wildcard && pair.transitive) {
+            ecs_rule_filter_t tr_filter = filter;
+            ecs_entity_t mask = ecs_trait(EcsWildcard, pair.pred);
+            tr_filter.mask = mask;
+            set_filter_expr_mask(&tr_filter, mask);
+
+            /* Find table set with the object replaced by a wildcard. This will
+             * contain all tables for the transitive predicate. */
+            ecs_sparse_t *tr_table_set;
+            if (!redo) {
+                tr_table_set = op_ctx->tr_table_set = find_table_set(
+                    world, tr_filter.mask);
+
+                /* Should always have a table set, since the table set that we 
+                 * found already is a subset of this one */
+                ecs_assert(tr_table_set != NULL, ECS_INTERNAL_ERROR, NULL);
+
+                /* Find table in table set. This will give us the first column
+                 * in which the predicate appears. The column has not yet been
+                 * resolved, because the table set we looked up did not have the
+                 * table we're evaluating. */
+                table_record = ecs_sparse_get_sparse(
+                    tr_table_set, ecs_table_record_t, table->id);
+                
+                /* If the table does not appear in the table set that contains
+                 * all tables for the transitive predicate, there is no match */
+                if (!table_record) {
+                    return false;
+                }
+
+                column = table_record->column - 1;
+            } else {
+                table_set = op_ctx->tr_table_set;
+                column = columns[op->column];
+            }
+
+            ecs_assert(column != -1, ECS_INTERNAL_ERROR, NULL);
+            
+            ecs_entity_t table_obj;
+            new_column = column;
+
+            do {
+                new_column = find_next_match(table->type, new_column + 1, &tr_filter);
+                
+                /* If no more column were found for the predicate, there are no
+                 * more results. */
+                if (new_column == -1) {
+                    return false;
+                }
+
+                table_obj = *(ecs_vector_get(
+                    table->type, ecs_entity_t, new_column));
+
+                table_obj = ecs_entity_t_lo(table_obj);
+
+            } while (!with_transitive(world, table_set, tr_table_set, table_obj, 
+                &filter, &tr_filter));
+
+            column = new_column;
+        } else {
             return false;
         }
     }
+
+    column = columns[op->column] = new_column;
 
     /* If we got here, we found a match. Table and column must be set */
     ecs_assert(table != NULL, ECS_INTERNAL_ERROR, NULL);

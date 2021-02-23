@@ -45,6 +45,12 @@
                 "find_transitive_2_branches",
                 "find_transitive_subtree",
                 "find_transitive_instances",
+                "transitive_fact_false",
+                "transitive_fact_true_depth_1",
+                "transitive_fact_true_depth_2",
+                "transitive_fact_true_depth_3",
+                "transitive_fact_true_depth_4",
+                "transitive_fact_true_depth_5",
                 "same_pred_obj",
                 "same_pred_obj_explicit_subject"
             ]

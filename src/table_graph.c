@@ -259,6 +259,7 @@ void init_edges(
         if (ECS_HAS_ROLE(e, TRAIT)) {
             ecs_entity_t type_w_wildcard = ecs_trait(
                 EcsWildcard, ecs_entity_t_hi(e));
+
             register_table(world, table, type_w_wildcard, i);
 
             ecs_entity_t subject_w_wildcard = ecs_trait(

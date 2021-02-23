@@ -146,9 +146,13 @@ const char *rules =
 "IsA(Speeder, Transport)\n"
 "IsA(CorellianLightFreighter, SpaceShip)\n"
 "IsA(MilleniumFalcon, CorellianLightFreighter)\n"
-"Faction(XWing, Rebels)\n"
 "IsA(XWing, SpaceShip)\n"
 "IsA(YWing, SpaceShip)\n"
+"Faction(XWing, Rebellion)\n"
+"IsA(Rebellion, Faction)\n"
+"IsA(FirstOrder, Faction)\n"
+"AtWar(FirstOrder, Rebellion)\n"
+"AtWar(Rebellion, FirstOrder)\n"
 "Human(Luke)\n"
 "Human(Leia)\n"
 "Human(Rey)\n"
@@ -1023,7 +1027,7 @@ void Rules_find_transitive_subtree() {
     test_assert(ecs_rule_next(&it));
     test_int(it.count, 2);
     test_str(ecs_get_name(world, it.entities[0]), "CorellianLightFreighter");
-    test_str(ecs_get_name(world, it.entities[1]), "YWing");
+    test_str(ecs_get_name(world, it.entities[2]), "YWing");
 
     test_assert(ecs_rule_next(&it));
     test_int(it.count, 1);
@@ -1160,4 +1164,107 @@ void Rules_same_pred_obj_explicit_subject() {
     test_assert(!ecs_rule_next(&it));
 
     ecs_fini(world);
+}
+
+void Rules_transitive_fact_true_depth_1() {
+    ecs_world_t *world = ecs_init();
+
+    test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
+
+    ecs_rule_t *r = ecs_rule_new(world, "IsA(XWing, SpaceShip)");
+    test_assert(r != NULL);
+
+    ecs_iter_t it = ecs_rule_iter(r);
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 0);
+
+    test_assert(!ecs_rule_next(&it));
+
+    ecs_fini(world);
+}
+
+void Rules_transitive_fact_false() {
+    ecs_world_t *world = ecs_init();
+
+    test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
+
+    ecs_rule_t *r = ecs_rule_new(world, "IsA(XWing, Creature)");
+    test_assert(r != NULL);
+
+    ecs_iter_t it = ecs_rule_iter(r);
+    test_assert(!ecs_rule_next(&it));
+
+    ecs_fini(world);
+}
+
+void Rules_transitive_fact_true_depth_2() {
+    ecs_world_t *world = ecs_init();
+
+    test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
+
+    ecs_rule_t *r = ecs_rule_new(world, "IsA(XWing, Transport)");
+    test_assert(r != NULL);
+
+    ecs_iter_t it = ecs_rule_iter(r);
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 0);
+
+    test_assert(!ecs_rule_next(&it));
+
+    ecs_fini(world);
+}
+
+void Rules_transitive_fact_true_depth_3() {
+    ecs_world_t *world = ecs_init();
+
+    test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
+
+    ecs_rule_t *r = ecs_rule_new(world, "IsA(XWing, Vehicle)");
+    test_assert(r != NULL);
+
+    ecs_iter_t it = ecs_rule_iter(r);
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 0);
+
+    test_assert(!ecs_rule_next(&it));
+
+    ecs_fini(world);
+}
+
+void Rules_transitive_fact_true_depth_4() {
+    ecs_world_t *world = ecs_init();
+
+    test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
+
+    ecs_rule_t *r = ecs_rule_new(world, "IsA(XWing, Machine)");
+    test_assert(r != NULL);
+
+    ecs_iter_t it = ecs_rule_iter(r);
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 0);
+
+    test_assert(!ecs_rule_next(&it));
+
+    ecs_fini(world);
+}
+
+void Rules_transitive_fact_true_depth_5() {
+    ecs_world_t *world = ecs_init();
+
+    test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
+
+    ecs_rule_t *r = ecs_rule_new(world, "IsA(XWing, Thing)");
+    test_assert(r != NULL);
+
+    ecs_iter_t it = ecs_rule_iter(r);
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 0);
+
+    test_assert(!ecs_rule_next(&it));
+
+    ecs_fini(world);
+}
+
+void Rules_transitive_fact_exclude_wrong_pred() {
+    // Implement testcase
 }
