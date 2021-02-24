@@ -1507,27 +1507,6 @@ void ecs_rule_iter_free(
     it->op_ctx = NULL;
 }
 
-/* Input operation. The input operation acts as a placeholder for the start of
- * the program, and creates an entry in the register array that can serve to
- * store variables passed to an iterator. */
-static
-bool eval_input(
-    ecs_rule_iter_t *it,
-    ecs_rule_op_t *op,
-    int16_t op_index,
-    bool redo)
-{
-    if (!redo) {
-        /* First operation executed by the iterator. Always return true. */
-        return true;
-    } else {
-        /* When Input is asked to redo, it means that all other operations have
-         * exhausted their results. Input itself does not yield anything, so
-         * return false. This will terminate rule execution. */
-        return false;
-    }
-}
-
 /* This function finds the next table in a table set, and is used by the select
  * operation. The function automatically skips empty tables, so that subsequent
  * operations don't waste a lot of processing for nothing. */
@@ -1686,6 +1665,27 @@ bool test_if_transitive(
     return false;
 }
 
+/* Input operation. The input operation acts as a placeholder for the start of
+ * the program, and creates an entry in the register array that can serve to
+ * store variables passed to an iterator. */
+static
+bool eval_input(
+    ecs_rule_iter_t *it,
+    ecs_rule_op_t *op,
+    int16_t op_index,
+    bool redo)
+{
+    if (!redo) {
+        /* First operation executed by the iterator. Always return true. */
+        return true;
+    } else {
+        /* When Input is asked to redo, it means that all other operations have
+         * exhausted their results. Input itself does not yield anything, so
+         * return false. This will terminate rule execution. */
+        return false;
+    }
+}
+
 static
 bool eval_dfs(
     ecs_rule_iter_t *it,
@@ -1831,10 +1831,7 @@ bool eval_dfs(
 }
 
 /* Select operation. The select operation finds and iterates a table set that
- * corresponds to its pair expression. A select is often followed up by one or
- * more With operations, which apply more filters to the table. Select 
- * operations are always the 'real' first operations (excluding Input) in 
- * programs that have a root (subject) variable. */
+ * corresponds to its pair expression.  */
 static
 bool eval_select(
     ecs_rule_iter_t *it,
@@ -1973,7 +1970,7 @@ bool eval_with(
 
     /* If looked for entity is not a wildcard (meaning there are no unknown/
      * unconstrained variables) and this is a redo, nothing more to yield. */
-    if (redo && !filter.wildcard) {
+    if (redo && !filter.wildcard && !pair.transitive) {
         return false;
     }
 
@@ -2038,10 +2035,11 @@ bool eval_with(
     
     /* If this is a redo, progress to the next match */
     } else {
+        table = table_from_reg(rule, op, regs, r);
+        
         /* First test if there are any more matches for the current table, in 
          * case we're looking for a wildcard. */
         if (filter.wildcard) {
-            table = table_from_reg(rule, op, regs, r);
             if (!table) {
                 return false;
             }

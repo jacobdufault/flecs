@@ -45,6 +45,7 @@ void Rules_transitive_fact_true_depth_2(void);
 void Rules_transitive_fact_true_depth_3(void);
 void Rules_transitive_fact_true_depth_4(void);
 void Rules_transitive_fact_true_depth_5(void);
+void Rules_transitive_fact_true_2_relationships(void);
 void Rules_same_pred_obj(void);
 void Rules_same_pred_obj_explicit_subject(void);
 
@@ -1679,6 +1680,10 @@ bake_test_case Rules_testcases[] = {
     {
         "transitive_fact_true_depth_5",
         Rules_transitive_fact_true_depth_5
+    },
+    {
+        "transitive_fact_true_2_relationships",
+        Rules_transitive_fact_true_2_relationships
     },
     {
         "same_pred_obj",
@@ -7248,7 +7253,7 @@ static bake_test_suite suites[] = {
         "Rules",
         NULL,
         NULL,
-        38,
+        39,
         Rules_testcases
     },
     {
