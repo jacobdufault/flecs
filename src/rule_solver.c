@@ -65,7 +65,7 @@ typedef struct ecs_rule_reg_t {
 /* Operations describe how the rule should be evaluated */
 typedef enum ecs_rule_op_kind_t {
     EcsRuleInput,       /* Input placeholder, first instruction in every rule */
-    EcsRuleFollow,      /* Follows a relationship depth-first */
+    EcsRuleDfs,         /* Follows a relationship depth-first */
     EcsRuleSelect,      /* Selects all ables for a given predicate */
     EcsRuleWith,        /* Applies a filter to a table or entity */
     EcsRuleEach,        /* Forwards each entity in a table */
@@ -95,22 +95,23 @@ typedef struct ecs_rule_with_ctx_t {
     ecs_sparse_t *table_set;    /* Currently evaluated table set */
     int32_t table_index;        /* Currently evaluated index in table set */
 
-    ecs_sparse_t *tr_table_set; /* Table set that blanks out object with a 
+    ecs_sparse_t *all_for_pred; /* Table set that blanks out object with a 
                                  * wildcard. Used for transitive queries */
 } ecs_rule_with_ctx_t;
 
-typedef struct ecs_rule_follow_frame_t {
+typedef struct ecs_rule_dfs_frame_t {
     ecs_rule_with_ctx_t with_ctx;
     ecs_table_t *table;
     int32_t row;
-} ecs_rule_follow_frame_t;
+    int32_t column;
+} ecs_rule_dfs_frame_t;
 
 /* Follow context */
-typedef struct ecs_rule_follow_ctx_t {
-    ecs_rule_follow_frame_t storage[16]; /* Alloc-free array for small trees */
-    ecs_rule_follow_frame_t *stack;
+typedef struct ecs_rule_dfs_ctx_t {
+    ecs_rule_dfs_frame_t storage[16]; /* Alloc-free array for small trees */
+    ecs_rule_dfs_frame_t *stack;
     int32_t sp;
-} ecs_rule_follow_ctx_t;
+} ecs_rule_dfs_ctx_t;
 
 /* Each context */
 typedef struct ecs_rule_each_ctx_t {
@@ -127,7 +128,7 @@ typedef struct ecs_rule_from_ctx_t {
  * stores information for stateful operations. */
 typedef struct ecs_rule_op_ctx_t {
     union {
-        ecs_rule_follow_ctx_t follow;
+        ecs_rule_dfs_ctx_t dfs;
         ecs_rule_with_ctx_t with;
         ecs_rule_each_ctx_t each;
         ecs_rule_from_ctx_t from;
@@ -1178,7 +1179,7 @@ ecs_rule_t* ecs_rule_new(
             /* If the variable was not written yet, insert a select */
             } else {
                 if (op->param.transitive) {
-                    op->kind = EcsRuleFollow;
+                    op->kind = EcsRuleDfs;
                 } else {
                     op->kind = EcsRuleSelect;
                 }
@@ -1193,11 +1194,11 @@ ecs_rule_t* ecs_rule_new(
     }
 
     /* Verify all subject variables have been written. Subject variables are of
-     * the table type, and a select/follow should have been inserted for each */
+     * the table type, and a select/dfs should have been inserted for each */
     for (v = 0; v < result->subject_variable_count; v ++) {
         if (!written[v]) {
             /* If the table variable hasn't been written, this can only happen
-             * if an instruction wrote the variable before a select/follow could
+             * if an instruction wrote the variable before a select/dfs could
              * have been inserted for it. Make sure that this is the case by
              * testing if an entity variable exists and whether it has been
              * written. */
@@ -1336,8 +1337,8 @@ char* ecs_rule_str(
         bool has_filter = false;
 
         switch(op->kind) {
-        case EcsRuleFollow:
-            ecs_strbuf_append(&buf, "follow");
+        case EcsRuleDfs:
+            ecs_strbuf_append(&buf, "dfs");
             has_filter = true;
             break;
         case EcsRuleSelect:
@@ -1579,7 +1580,114 @@ ecs_sparse_t* find_table_set(
 }
 
 static
-bool eval_follow(
+ecs_table_t* table_from_entity(
+    ecs_world_t *world,
+    ecs_entity_t e)
+{
+    ecs_record_t *record = ecs_eis_get(world, e);
+    if (record) {
+        return record->table;
+    } else {
+        return NULL;
+    }
+}
+
+static
+ecs_table_t* table_from_reg(
+    const ecs_rule_t *rule,
+    ecs_rule_op_t *op,
+    ecs_rule_reg_t *regs,
+    uint8_t r)
+{
+    if (r == UINT8_MAX) {
+        ecs_assert(op->subject != 0, ECS_INTERNAL_ERROR, NULL);
+        return table_from_entity(rule->world, op->subject);
+    }
+    if (rule->variables[r].kind == EcsRuleVarKindTable) {
+        return regs[r].is.table;
+    }
+    if (rule->variables[r].kind == EcsRuleVarKindEntity) {
+        return table_from_entity(rule->world, regs[r].is.entity);
+    } 
+    return NULL;
+}
+
+static
+void set_column(
+    ecs_rule_iter_t *it,
+    ecs_rule_op_t *op,
+    ecs_type_t type,
+    int32_t column)
+{
+    ecs_entity_t *comp = ecs_vector_get(type, ecs_entity_t, column);
+    ecs_assert(comp != NULL, ECS_INTERNAL_ERROR, NULL);
+    it->table.components[op->column] = *comp;
+}
+
+/* Test if provided object has a transitive relationship with the filter */
+static
+bool test_if_transitive(
+    ecs_world_t *world,
+    ecs_sparse_t *table_set,
+    ecs_sparse_t *all_for_pred,
+    ecs_entity_t table_obj,
+    ecs_rule_filter_t *filter,
+    ecs_rule_filter_t *tr_filter)
+{
+    ecs_table_t *table = table_from_entity(world, table_obj);
+
+    /* If entity has no table, it has no relationships and can therefore not
+     * have a transitive relationship with the object in the filter */
+    if (!table) {
+        return false;
+    }
+
+    ecs_table_record_t *table_record = ecs_sparse_get_sparse(
+        table_set, ecs_table_record_t, table->id);
+
+    /* If the table of the entity is in the required table set, the relationship
+     * was matched. */
+    if (table_record) {
+        return true;
+    }
+
+    /* If the object does not have a direct transitive relationship with the
+     * required object, keep searching by using the transitive table set. This
+     * set contains all tables that have one or more instances of the transitive
+     * predicate. */
+    table_record = ecs_sparse_get_sparse(
+        all_for_pred, ecs_table_record_t, table->id);
+    
+    /* If no table record was found in the transitive table set, it has no
+     * instances of the transitive predicate and therefore cannot have a
+     * transitive relationship with the object in the filter. */
+    if (!table_record) {
+        return false;
+    }
+
+    /* If a table set is found, loop each instance of the transitive predicate
+     * and search recursively until a transitive relationship has been found */
+    table = table_record->table;
+    ecs_type_t type = table->type;
+    int32_t column = table_record->column;
+
+    do {
+        ecs_entity_t obj = *(ecs_vector_get(type, ecs_entity_t, column));        
+        obj = ecs_entity_t_lo(obj);
+
+        if (test_if_transitive(world, table_set, all_for_pred, obj, filter, 
+            tr_filter))
+        {
+            return true;
+        }
+    } while ((column = find_next_match(type, column + 1, tr_filter)) != -1);
+    
+    /* No transitive relationship has been found */
+    return false;
+}
+
+static
+bool eval_dfs(
     ecs_rule_iter_t *it,
     ecs_rule_op_t *op,
     int16_t op_index,
@@ -1587,13 +1695,13 @@ bool eval_follow(
 {
     const ecs_rule_t  *rule = it->rule;
     ecs_world_t *world = rule->world;
-    ecs_rule_follow_ctx_t *op_ctx = &it->op_ctx[op_index].is.follow;
-    ecs_rule_follow_frame_t *frame = NULL;
+    ecs_rule_dfs_ctx_t *op_ctx = &it->op_ctx[op_index].is.dfs;
+    ecs_rule_dfs_frame_t *frame = NULL;
     ecs_table_record_t table_record;
     ecs_rule_reg_t *regs = get_registers(it, op_index);
 
     /* Get register indices for output */
-    int32_t sp, row;
+    int32_t sp, row, column;
     uint8_t r = op->r_out;
     ecs_assert(r != UINT8_MAX, ECS_INTERNAL_ERROR, NULL);
 
@@ -1625,6 +1733,8 @@ bool eval_follow(
 
         regs[r].is.table = frame->table = table_record.table;
         frame->row = 0;
+        frame->column = table_record.column;
+        set_column(it, op, table_record.table->type, table_record.column);
         return true;
     }
 
@@ -1634,6 +1744,7 @@ bool eval_follow(
         table = frame->table;
         table_set = frame->with_ctx.table_set;
         row = frame->row;
+        column = frame->column;
 
         /* If row exceeds number of elements in table, find next table in frame that
          * still has entities */
@@ -1644,6 +1755,8 @@ bool eval_follow(
                 table = frame->table = table_record.table;
                 ecs_assert(table != NULL, ECS_INTERNAL_ERROR, NULL);
                 row = frame->row = 0;
+                column = frame->column = table_record.column;
+                set_column(it, op, table_record.table->type, table_record.column);
                 regs[r].is.table = table;
                 return true;
             } else {
@@ -1688,7 +1801,7 @@ bool eval_follow(
 
             /* If table set is found, find first non-empty table */
             if (table_set) {
-                ecs_rule_follow_frame_t *new_frame = &op_ctx->stack[sp + 1];
+                ecs_rule_dfs_frame_t *new_frame = &op_ctx->stack[sp + 1];
                 new_frame->with_ctx.table_set = table_set;
                 new_frame->with_ctx.table_index = -1;
                 table_record = find_next_table(table_set, &filter, &new_frame->with_ctx);
@@ -1699,6 +1812,8 @@ bool eval_follow(
                     op_ctx->sp ++;
                     new_frame->table = table;
                     new_frame->row = 0;
+                    new_frame->column = table_record.column;
+                    frame = new_frame;
                 }
             }
 
@@ -1709,7 +1824,8 @@ bool eval_follow(
         } while (!table && row < row_count);
     } while (!table);
 
-    regs[r].is.table = table;  
+    regs[r].is.table = table;
+    set_column(it, op, table->type, frame->column);
 
     return true;
 }
@@ -1827,107 +1943,10 @@ bool eval_select(
     if (filter.wildcard) {
         reify_variables(it, &filter, table->type, column);
     }
-
-    ecs_entity_t *comp = ecs_vector_get(table->type, ecs_entity_t, column);
-    ecs_assert(comp != NULL, ECS_INTERNAL_ERROR, NULL);
-    it->table.components[op->column] = *comp;
+    
+    set_column(it, op, table->type, column);
 
     return true;
-}
-
-static
-ecs_table_t* table_from_entity(
-    ecs_world_t *world,
-    ecs_entity_t e)
-{
-    ecs_record_t *record = ecs_eis_get(world, e);
-    if (record) {
-        return record->table;
-    } else {
-        return NULL;
-    }
-}
-
-static
-ecs_table_t* table_from_reg(
-    const ecs_rule_t *rule,
-    ecs_rule_op_t *op,
-    ecs_rule_reg_t *regs,
-    uint8_t r)
-{
-    if (r == UINT8_MAX) {
-        ecs_assert(op->subject != 0, ECS_INTERNAL_ERROR, NULL);
-        return table_from_entity(rule->world, op->subject);
-    }
-    if (rule->variables[r].kind == EcsRuleVarKindTable) {
-        return regs[r].is.table;
-    }
-    if (rule->variables[r].kind == EcsRuleVarKindEntity) {
-        return table_from_entity(rule->world, regs[r].is.entity);
-    } 
-    return NULL;
-}
-
-/* Test if provided object has a transitive relationship with the filter */
-static
-bool with_transitive(
-    ecs_world_t *world,
-    ecs_sparse_t *table_set,
-    ecs_sparse_t *tr_table_set,
-    ecs_entity_t table_obj,
-    ecs_rule_filter_t *filter,
-    ecs_rule_filter_t *tr_filter)
-{
-    ecs_table_t *table = table_from_entity(world, table_obj);
-
-    /* If entity has no table, it has no relationships and can therefore not
-     * have a transitive relationship with the object in the filter */
-    if (!table) {
-        return false;
-    }
-
-    ecs_table_record_t *table_record = ecs_sparse_get_sparse(
-        table_set, ecs_table_record_t, table->id);
-
-    /* If the table of the entity is in the required table set, the relationship
-     * was matched. */
-    if (table_record) {
-        return true;
-    }
-
-    /* If the object does not have a direct transitive relationship with the
-     * required object, keep searching by using the transitive table set. This
-     * set contains all tables that have one or more instances of the transitive
-     * predicate. */
-    table_record = ecs_sparse_get_sparse(
-        tr_table_set, ecs_table_record_t, table->id);
-    
-    /* If no table record was found in the transitive table set, it has no
-     * instances of the transitive predicate and therefore cannot have a
-     * transitive relationship with the object in the filter. */
-    if (!table_record) {
-        return false;
-    }
-
-    /* If a table set is found, loop each instance of the transitive predicate
-     * and search recursively until a transitive relationship has been found */
-    table = table_record->table;
-    ecs_type_t type = table->type;
-    int32_t column = table_record->column;
-
-    do {
-        ecs_entity_t obj = *(ecs_vector_get(type, ecs_entity_t, column));        
-        obj = ecs_entity_t_lo(obj);
-
-        if (with_transitive(world, table_set, tr_table_set, obj, filter, 
-            tr_filter))
-        {
-            return true;
-        }
-    } while ((column = find_next_match(type, column + 1, tr_filter)) != -1);
-    
-    /* No transitive relationship has been found */
-    return false;
 }
 
 /* With operation. The With operation always comes after either the Select or
@@ -2050,21 +2069,21 @@ bool eval_with(
 
             /* Find table set with the object replaced by a wildcard. This will
              * contain all tables for the transitive predicate. */
-            ecs_sparse_t *tr_table_set;
+            ecs_sparse_t *all_for_pred;
             if (!redo) {
-                tr_table_set = op_ctx->tr_table_set = find_table_set(
+                all_for_pred = op_ctx->all_for_pred = find_table_set(
                     world, tr_filter.mask);
 
                 /* Should always have a table set, since the table set that we 
                  * found already is a subset of this one */
-                ecs_assert(tr_table_set != NULL, ECS_INTERNAL_ERROR, NULL);
+                ecs_assert(all_for_pred != NULL, ECS_INTERNAL_ERROR, NULL);
 
                 /* Find table in table set. This will give us the first column
                  * in which the predicate appears. The column has not yet been
                  * resolved, because the table set we looked up did not have the
                  * table we're evaluating. */
                 table_record = ecs_sparse_get_sparse(
-                    tr_table_set, ecs_table_record_t, table->id);
+                    all_for_pred, ecs_table_record_t, table->id);
                 
                 /* If the table does not appear in the table set that contains
                  * all tables for the transitive predicate, there is no match */
@@ -2072,9 +2091,14 @@ bool eval_with(
                     return false;
                 }
 
+                /* Set the starting column. Offset by -1 because the next code
+                 * adds one to the column to make sure find_next_match makes
+                 * progress when scanning the table type */
                 column = table_record->column - 1;
             } else {
-                table_set = op_ctx->tr_table_set;
+                /* Not the first time the op is evaluated, get transitive table
+                 * set and column from previous eval */
+                all_for_pred = op_ctx->all_for_pred;
                 column = columns[op->column];
             }
 
@@ -2084,7 +2108,10 @@ bool eval_with(
             new_column = column;
 
             do {
-                new_column = find_next_match(table->type, new_column + 1, &tr_filter);
+                /* Find next matching column in table that has the transitive
+                 * predicate */
+                new_column = find_next_match(
+                    table->type, new_column + 1, &tr_filter);
                 
                 /* If no more column were found for the predicate, there are no
                  * more results. */
@@ -2092,13 +2119,16 @@ bool eval_with(
                     return false;
                 }
 
+                /* Get the object from the column. We'll have to check if it has
+                 * a transitive relationship to the object in the filter */
                 table_obj = *(ecs_vector_get(
                     table->type, ecs_entity_t, new_column));
 
                 table_obj = ecs_entity_t_lo(table_obj);
 
-            } while (!with_transitive(world, table_set, tr_table_set, table_obj, 
-                &filter, &tr_filter));
+            /* Keep checking columns until a match has been found */
+            } while (!test_if_transitive(world, table_set, all_for_pred, 
+                table_obj, &filter, &tr_filter));
 
             column = new_column;
         } else {
@@ -2117,9 +2147,7 @@ bool eval_with(
         reify_variables(it, &filter, table->type, column);
     }
 
-    ecs_entity_t *comp = ecs_vector_get(table->type, ecs_entity_t, column);
-    ecs_assert(comp != NULL, ECS_INTERNAL_ERROR, NULL);
-    it->table.components[op->column] = *comp;    
+    set_column(it, op, table->type, column);
 
     return true;
 }
@@ -2219,8 +2247,8 @@ bool eval_op(
     switch(op->kind) {
     case EcsRuleInput:
         return eval_input(it, op, op_index, redo);
-    case EcsRuleFollow:
-        return eval_follow(it, op, op_index, redo);
+    case EcsRuleDfs:
+        return eval_dfs(it, op, op_index, redo);
     case EcsRuleSelect:
         return eval_select(it, op, op_index, redo);
     case EcsRuleWith:
@@ -2298,7 +2326,6 @@ void set_iter_table(
     /* Set table parameters */
     it->table.columns = get_columns(it, cur);
     it->table.data = data;
-    iter->table = &it->table;
     iter->table_columns = data->columns;
 
     ecs_assert(it->table.components != NULL, ECS_INTERNAL_ERROR, NULL);
@@ -2367,6 +2394,8 @@ bool ecs_rule_next(
         /* If the current operation is yield, return results */
         if (op->kind == EcsRuleYield) {
             uint8_t r = op->r_in;
+
+            iter->table = &it->table;
 
             /* If the input register for the yield does not point to a variable,
              * the rule doesn't contain a this (.) variable. In that case, the
