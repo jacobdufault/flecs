@@ -136,7 +136,8 @@ const char *rules =
 "IsA(Person, Thing)\n"
 "IsA(Character, Person)\n"
 "IsA(Human, Character)\n"
-"IsA(Robot, Character)\n"
+"IsA(Droid, Character)\n"
+"IsA(Droid, Machine)\n"
 "IsA(Creature, Character)\n"
 "IsA(Wookie, Creature)\n"
 "IsA(Machine, Thing)\n"
@@ -168,9 +169,9 @@ const char *rules =
 "Jedi(Rey)\n"
 "Sith(DarthVader)\n"
 "Sith(Palpatine)\n"
-"Robot(R2D2)\n"
-"Robot(C3PO)\n"
-"Robot(BB8)\n"
+"Droid(R2D2)\n"
+"Droid(C3PO)\n"
+"Droid(BB8)\n"
 "Wookie(Chewbacca)\n"
 "HomePlanet(Yoda, Dagobah)\n"
 "HomePlanet(Luke, Tatooine)\n"
@@ -917,14 +918,14 @@ void Rules_join_by_predicate_from_subject() {
     test_str(ecs_get_name(world, it.entities[0]), "IsA");
     test_column_entity(&it, 1, "Transitive");
     test_column_entity(&it, 2, "(IsA,Character)");
-    test_var(&it, x_var, "Robot");    
+    test_var(&it, x_var, "Creature");    
 
     test_assert(ecs_rule_next(&it));
     test_int(it.count, 1);
     test_str(ecs_get_name(world, it.entities[0]), "IsA");
     test_column_entity(&it, 1, "Transitive");
     test_column_entity(&it, 2, "(IsA,Character)");
-    test_var(&it, x_var, "Creature");
+    test_var(&it, x_var, "Droid");
 
     test_assert(!ecs_rule_next(&it));
 
@@ -948,10 +949,9 @@ void Rules_find_transitive() {
 
     test_assert(ecs_rule_next(&it));
     test_column_entity(&it, 1, "(IsA,Character)");
-    test_int(it.count, 3);
+    test_int(it.count, 2);
     test_str(ecs_get_name(world, it.entities[0]), "Human");
-    test_str(ecs_get_name(world, it.entities[1]), "Robot");
-    test_str(ecs_get_name(world, it.entities[2]), "Creature");
+    test_str(ecs_get_name(world, it.entities[1]), "Creature");
 
     test_assert(ecs_rule_next(&it));
     test_column_entity(&it, 1, "(IsA,Human)");
@@ -962,6 +962,11 @@ void Rules_find_transitive() {
     test_column_entity(&it, 1, "(IsA,Creature)");
     test_int(it.count, 1);
     test_str(ecs_get_name(world, it.entities[0]), "Wookie");
+
+    test_assert(ecs_rule_next(&it));
+    test_column_entity(&it, 1, "(IsA,Character)");
+    test_int(it.count, 1);
+    test_str(ecs_get_name(world, it.entities[0]), "Droid");
 
     ecs_fini(world);
 }
@@ -1005,10 +1010,9 @@ void Rules_find_transitive_2_branches() {
 
     test_assert(ecs_rule_next(&it));
     test_column_entity(&it, 1, "(IsA,Character)");
-    test_int(it.count, 3);
+    test_int(it.count, 2);
     test_str(ecs_get_name(world, it.entities[0]), "Human");
-    test_str(ecs_get_name(world, it.entities[1]), "Robot");
-    test_str(ecs_get_name(world, it.entities[2]), "Creature");
+    test_str(ecs_get_name(world, it.entities[1]), "Creature");
 
     test_assert(ecs_rule_next(&it));
     test_column_entity(&it, 1, "(IsA,Human)");
@@ -1019,6 +1023,16 @@ void Rules_find_transitive_2_branches() {
     test_column_entity(&it, 1, "(IsA,Creature)");
     test_int(it.count, 1);
     test_str(ecs_get_name(world, it.entities[0]), "Wookie");
+
+    test_assert(ecs_rule_next(&it));
+    test_column_entity(&it, 1, "(IsA,Character)");
+    test_int(it.count, 1);
+    test_str(ecs_get_name(world, it.entities[0]), "Droid");
+
+    test_assert(ecs_rule_next(&it));
+    test_column_entity(&it, 1, "(IsA,Machine)");
+    test_int(it.count, 1);
+    test_str(ecs_get_name(world, it.entities[0]), "Droid");
 
     test_assert(ecs_rule_next(&it));
     test_column_entity(&it, 1, "(IsA,Machine)");
@@ -1147,21 +1161,6 @@ void Rules_find_transitive_instances() {
     test_var(&it, x_var, "Human");
 
     test_assert(ecs_rule_next(&it));
-    test_int(it.count, 2);
-    test_str(ecs_get_name(world, it.entities[0]), "R2D2");
-    test_str(ecs_get_name(world, it.entities[1]), "C3PO");
-    test_column_entity(&it, 1, "Robot");
-    test_column_entity(&it, 2, "(IsA,Character)");
-    test_var(&it, x_var, "Robot");
-
-    test_assert(ecs_rule_next(&it));
-    test_int(it.count, 1);    
-    test_str(ecs_get_name(world, it.entities[0]), "BB8");
-    test_column_entity(&it, 1, "Robot");
-    test_column_entity(&it, 2, "(IsA,Character)");
-    test_var(&it, x_var, "Robot");
-
-    test_assert(ecs_rule_next(&it));
     test_int(it.count, 1);
     test_str(ecs_get_name(world, it.entities[0]), "Yoda");
     test_column_entity(&it, 1, "Creature");
@@ -1181,6 +1180,21 @@ void Rules_find_transitive_instances() {
     test_column_entity(&it, 1, "Wookie");
     test_column_entity(&it, 2, "(IsA,Creature)");
     test_var(&it, x_var, "Wookie");
+
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 2);
+    test_str(ecs_get_name(world, it.entities[0]), "R2D2");
+    test_str(ecs_get_name(world, it.entities[1]), "C3PO");
+    test_column_entity(&it, 1, "Droid");
+    test_column_entity(&it, 2, "(IsA,Character)");
+    test_var(&it, x_var, "Droid");
+
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 1);    
+    test_str(ecs_get_name(world, it.entities[0]), "BB8");
+    test_column_entity(&it, 1, "Droid");
+    test_column_entity(&it, 2, "(IsA,Character)");
+    test_var(&it, x_var, "Droid");
 
     test_assert(!ecs_rule_next(&it));
 
@@ -1358,6 +1372,38 @@ void Rules_transitive_fact_true_2_relationships() {
     test_assert(ecs_rule_next(&it));
     test_column_entity(&it, 1, "(IsA,Machine)");
     test_int(it.count, 0);    
+
+    test_assert(!ecs_rule_next(&it));
+
+    ecs_fini(world);
+}
+
+void Rules_transitive_predicate_instances() {
+    ecs_world_t *world = ecs_init();
+
+    test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
+
+    ecs_rule_t *r = ecs_rule_new(world, "Machine");
+    test_assert(r != NULL);
+
+    printf("%s\n", ecs_rule_str(r));
+
+    ecs_iter_t it = ecs_rule_iter(r);
+    test_assert(ecs_rule_next(&it));
+    test_column_entity(&it, 1, "Droid");
+    test_int(it.count, 2);
+    test_str(ecs_get_name(world, it.entities[0]), "R2D2");
+    test_str(ecs_get_name(world, it.entities[1]), "C3PO");
+
+    test_assert(ecs_rule_next(&it));
+    test_column_entity(&it, 1, "Droid");
+    test_int(it.count, 1);
+    test_str(ecs_get_name(world, it.entities[0]), "BB8");
+
+    test_assert(ecs_rule_next(&it));
+    test_column_entity(&it, 1, "Cyborg");
+    test_int(it.count, 1);
+    test_str(ecs_get_name(world, it.entities[0]), "Grievous");
 
     test_assert(!ecs_rule_next(&it));
 

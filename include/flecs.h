@@ -331,6 +331,8 @@ typedef struct EcsTrigger {
 #define EcsWildcard (ECS_HI_COMPONENT_ID + 27)
 #define EcsThis (ECS_HI_COMPONENT_ID + 28)
 #define EcsTransitive (ECS_HI_COMPONENT_ID + 29)
+#define EcsFinal (ECS_HI_COMPONENT_ID + 30)
+#define EcsIsA (ECS_HI_COMPONENT_ID + 31)
 
 /* Value used to quickly check if component is builtin. This is used to quickly
  * filter out tables with builtin components (for example for ecs_delete) */

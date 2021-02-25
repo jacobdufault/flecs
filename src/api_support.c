@@ -342,6 +342,8 @@ ecs_entity_t ecs_new_component(
         ecs_add_entity(world, result, ECS_CHILDOF | scope);
     }
 
+    ecs_add_entity(world, result, EcsFinal);
+
     bool added = false;
     EcsComponent *ptr = ecs_get_mut(world, result, EcsComponent, &added);
 

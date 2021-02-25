@@ -53,7 +53,8 @@
                 "transitive_fact_true_depth_5",
                 "transitive_fact_true_2_relationships",
                 "same_pred_obj",
-                "same_pred_obj_explicit_subject"
+                "same_pred_obj_explicit_subject",
+                "transitive_predicate_instances"
             ]
         }, {
             "id": "New",

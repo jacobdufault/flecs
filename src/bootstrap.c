@@ -222,9 +222,28 @@ void ecs_bootstrap(
 
     /* Initialize EcsTransitive */
     ecs_set(world, EcsTransitive, EcsName, {.value = "Transitive"});
-    ecs_assert(ecs_get_name(world, EcsWildcard) != NULL, ECS_INTERNAL_ERROR, NULL);
+    ecs_assert(ecs_get_name(world, EcsTransitive) != NULL, ECS_INTERNAL_ERROR, NULL);
     ecs_assert(ecs_lookup(world, "Transitive") == EcsTransitive, ECS_INTERNAL_ERROR, NULL);
-    ecs_add_entity(world, EcsWildcard, ECS_CHILDOF | EcsFlecsCore);  
+    ecs_add_entity(world, EcsTransitive, ECS_CHILDOF | EcsFlecsCore);
+
+    /* Initialize EcsFinal */
+    ecs_set(world, EcsFinal, EcsName, {.value = "Final"});
+    ecs_assert(ecs_get_name(world, EcsFinal) != NULL, ECS_INTERNAL_ERROR, NULL);
+    ecs_assert(ecs_lookup(world, "Final") == EcsFinal, ECS_INTERNAL_ERROR, NULL);
+    ecs_add_entity(world, EcsFinal, ECS_CHILDOF | EcsFlecsCore); 
+
+    /* Initialize EcsIsA */
+    ecs_set(world, EcsIsA, EcsName, {.value = "IsA"});
+    ecs_assert(ecs_get_name(world, EcsIsA) != NULL, ECS_INTERNAL_ERROR, NULL);
+    ecs_assert(ecs_lookup(world, "IsA") == EcsIsA, ECS_INTERNAL_ERROR, NULL);
+    ecs_add_entity(world, EcsIsA, ECS_CHILDOF | EcsFlecsCore);
+    ecs_add_entity(world, EcsIsA, EcsTransitive);
+    ecs_add_entity(world, EcsIsA, EcsFinal);
+
+    ecs_add_entity(world, ecs_typeid(EcsComponent), EcsFinal);
+    ecs_add_entity(world, ecs_typeid(EcsName), EcsFinal);
+    ecs_add_entity(world, EcsTransitive, EcsFinal);
+    ecs_add_entity(world, EcsFinal, EcsFinal);
 
     ecs_set_scope(world, 0);
 

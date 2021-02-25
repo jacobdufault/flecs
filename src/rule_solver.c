@@ -25,6 +25,7 @@ typedef struct ecs_rule_pair_t {
     uint32_t obj;
     int32_t reg_mask; /* bit 1 = predicate, bit 2 = object, bit 4 = wildcard */
     bool transitive; /* Is predicate transitive */
+    bool final; /* Is predicate final */
 } ecs_rule_pair_t;
 
 /* Filter for evaluating & reifing types and variables. Filters are created ad-
@@ -141,6 +142,7 @@ typedef struct ecs_rule_op_ctx_t {
         ecs_rule_each_ctx_t each;
         ecs_rule_setjmp_ctx_t setjmp;
     } is;
+    int32_t last_op;
 } ecs_rule_op_ctx_t;
 
 /* Rule variables allow for the rule to be parameterized */
@@ -230,6 +232,14 @@ ecs_rule_var_t* create_variable(
     }
 
     return var;
+}
+
+static
+ecs_rule_var_t* create_anonymous_variable(
+    ecs_rule_t *rule,
+    ecs_rule_var_kind_t kind)
+{
+    return create_variable(rule, kind, NULL);
 }
 
 /* Find variable with specified name and type. If Unknown is provided as type,
@@ -522,6 +532,7 @@ ecs_rule_pair_t column_to_pair(
 
         /* Set flag so the operation can see that the predicate is a variable */
         result.reg_mask |= RULE_PAIR_PREDICATE;
+        result.final = true;
     } else {
         /* If the predicate is not a variable, simply store its id. */
         result.pred = pred_id;
@@ -533,6 +544,10 @@ ecs_rule_pair_t column_to_pair(
             if (column->argc == 2) {
                 result.transitive = true;
             }
+        }
+
+        if (ecs_has_entity(rule->world, pred_id, EcsFinal)) {
+            result.final = true;
         }
     }
 
@@ -613,7 +628,7 @@ ecs_rule_filter_t pair_to_filter(
     /* Get registers in case we need to resolve ids from registers. Get them
      * from the previous, not the current stack frame as the current operation
      * hasn't reified its variables yet. */
-    ecs_rule_reg_t *regs = get_registers(it, it->op - 1);
+    ecs_rule_reg_t *regs = get_registers(it, it->op_ctx[it->op].last_op);
 
     if (pair.reg_mask & RULE_PAIR_OBJECT) {
         obj = entity_reg_get(it->rule, regs, obj);
@@ -1254,6 +1269,133 @@ void insert_yield(
     }
 }
 
+/* Return subset including the root */
+static
+void insert_select_incl_subset(
+    ecs_rule_t *rule,
+    ecs_rule_op_t *op,
+    ecs_rule_var_t *var,
+    ecs_rule_pair_t pair,
+    int32_t c)
+{
+    int32_t setjmp_lbl = rule->operation_count - 1;
+    int32_t store_lbl = setjmp_lbl + 1;
+    int32_t subset_lbl = setjmp_lbl + 2;
+    int32_t next_op = setjmp_lbl + 4;
+    int32_t prev_op = setjmp_lbl - 1;
+
+    /* Insert 3 operations at once, so we don't have to worry about how
+     * the instruction array reallocs */
+    insert_operation(rule, -1);
+    insert_operation(rule, -1);
+    op = insert_operation(rule, -1);
+
+    ecs_rule_op_t *setjmp = op - 3;
+    ecs_rule_op_t *store = op - 2;
+    ecs_rule_op_t *subset = op - 1;
+    ecs_rule_op_t *jump = op;
+
+    /* The SetJmp operation stores a conditional jump label that either
+     * points to the Store or SubSet operation */
+    setjmp->kind = EcsRuleSetJmp;
+    setjmp->on_pass = store_lbl;
+    setjmp->on_fail = subset_lbl;
+
+    /* The Store operation yields the root of the subtree. After yielding,
+     * this operation will fail and return to SetJmp, which will cause it
+     * to switch to the SubSet operation. */
+    store->kind = EcsRuleStore;
+    store->on_pass = next_op;
+    store->on_fail = setjmp_lbl;
+    store->has_in = true;
+    store->has_out = true;
+    store->r_out = var->id;
+    store->column = c;
+
+    /* If the object of the filter is not a variable, store literal */
+    if (!(pair.reg_mask & RULE_PAIR_OBJECT)) {
+        store->r_in = UINT8_MAX;
+        store->subject = pair.obj;
+    } else {
+        store->r_in = pair.obj;
+    }
+
+    /* The SubSet operation yields tables that are subsets of the root */
+    subset->kind = EcsRuleSubSet;
+    subset->param = pair;
+    subset->on_pass = next_op;
+    subset->on_fail = prev_op;
+    subset->has_out = true;
+    subset->r_out = var->id;
+    subset->column = c;
+
+    /* The jump operation jumps to either the store or subset operation,
+     * depending on whether the store operation already yielded. The 
+     * operation is inserted last, so that the on_fail label of the next 
+     * operation will point to it */
+    jump->kind = EcsRuleJump;
+    
+    /* The pass/fail labels of the Jump operation are not used, since it
+     * jumps to a variable location. Instead, the pass label is (ab)used to
+     * store the label of the SetJmp operation, so that the jump can access
+     * the label it needs to jump to from the setjmp op_ctx. */
+    jump->on_pass = setjmp_lbl;
+    jump->on_fail = -1;
+}
+
+/* Similar to insert_select_incl_subset, but instead of the relationship, return
+ * the instances of the relationships. */
+static
+void insert_select_incl_subset_instances(
+    ecs_rule_t *rule,
+    ecs_rule_op_t *op,
+    ecs_rule_var_t *var,
+    ecs_rule_pair_t pair,
+    int32_t c,
+    bool *written)
+{
+    /* Store var id because we're going to potentially realloc the var array */
+    int32_t var_id = var->id;
+
+    /* First, create anonymous variable for storing the relationship itself. 
+     * Also create entity variable, as we need to yield each entity in the
+     * returned table. */
+    ecs_rule_var_t *av = create_anonymous_variable(rule, EcsRuleVarKindTable);
+    ecs_rule_var_t *ave = create_variable(rule, EcsRuleVarKindEntity, av->name);
+    av = &rule->variables[ave->id - 1];
+
+    /* Insert operations that populate variable with the relationship tree. 
+     * For this we need to create a pair that contains the IsA relationship. */
+    ecs_rule_pair_t is_a_pair;
+    is_a_pair.pred = EcsIsA;
+    is_a_pair.obj = pair.pred;
+    is_a_pair.reg_mask = 0;
+    is_a_pair.transitive = false;
+    is_a_pair.final = true;
+
+    /* Generate the operations */
+    insert_select_incl_subset(rule, op, av, is_a_pair, -1);
+
+    /* Make sure that Each is inserted for variable */
+    written[av->id] = true;
+    write_variable(rule, ave, c, written);
+
+    /* Now create a select operation that uses the relationship stored in the
+     * anonymous variable to find all instances */
+    ecs_rule_op_t *select = insert_operation(rule, -1);
+
+    /* Initialize filter for select, use variable as predicate */
+    select->param.pred = ave->id;
+    select->param.obj = pair.obj;
+    select->param.reg_mask = pair.reg_mask | RULE_PAIR_PREDICATE;
+
+    /* Set remaining values */
+    select->kind = EcsRuleSelect;
+    select->has_out = true;
+    select->r_out = var_id;
+    select->column = c;
+}
+
 /* Insert select operation. A select returns all tables that match a pattern */
 static
 void insert_select(
@@ -1261,81 +1403,28 @@ void insert_select(
     ecs_rule_op_t *op,
     ecs_rule_var_t *var,
     int32_t c,
-    ecs_rule_var_t *obj)
+    bool *written)
 {
-    /* If this the param is not transitive, a normal select will do */
-    if (!op->param.transitive) {
-        op->kind = EcsRuleSelect;
-        op->has_out = true;
-        op->r_out = var->id;
+    written[var->id] = true;
 
+    /* If predicate is not Final, we need to search for IsA relationships. */    
+    if (!op->param.final) {
+        insert_select_incl_subset_instances(rule, op, var, op->param, c, written);
+    
     /* If the param is transitive, we need to insert a SubSet operation which
      * does a depth-first search to iterate the transitive relationship. By
      * default, iterating a transitive relationship als includes the root of the
      * tree, so that when iterating all subsets of Animal, Animal itself is also
-     * returned. This requires combining a Store with a SubSet */
+     * returned. This requires combining a Store with a SubSet */    
+    } else if (op->param.transitive) {
+        insert_select_incl_subset(rule, op, var, op->param, c);
+
+    /* If the param is final and not transitive a normal select will do */
     } else {
-        int32_t setjmp_lbl = rule->operation_count - 1;
-        int32_t store_lbl = setjmp_lbl + 1;
-        int32_t subset_lbl = setjmp_lbl + 2;
-        int32_t next_op = setjmp_lbl + 4;
-        int32_t prev_op = setjmp_lbl - 1;
-
-        /* Insert 3 operations at once, so we don't have to worry about how
-         * the instruction array reallocs */
-        insert_operation(rule, c);
-        insert_operation(rule, c);
-        op = insert_operation(rule, c);
-
-        ecs_rule_op_t *setjmp = op - 3;
-        ecs_rule_op_t *store = op - 2;
-        ecs_rule_op_t *subset = op - 1;
-        ecs_rule_op_t *jump = op;
-
-        /* The SetJmp operation stores a conditional jump label that either
-         * points to the Store or SubSet operation */
-        setjmp->kind = EcsRuleSetJmp;
-        setjmp->on_pass = store_lbl;
-        setjmp->on_fail = subset_lbl;
-
-        /* The Store operation yields the root of the subtree. After yielding,
-         * this operation will fail and return to SetJmp, which will cause it
-         * to switch to the SubSet operation. */
-        store->kind = EcsRuleStore;
-        store->on_pass = next_op;
-        store->on_fail = setjmp_lbl;
-        store->has_in = true;
-        store->has_out = true;
-        store->r_out = var->id;
-
-        /* If the object of the filter is not a variable, store literal */
-        if (!obj) {
-            store->r_in = UINT8_MAX;
-            store->subject = store->param.obj;
-        } else {
-            store->r_in = obj->id;
-        }
-
-        /* The SubSet operation yields tables that are subsets of the root */
-        subset->kind = EcsRuleSubSet;
-        subset->on_pass = next_op;
-        subset->on_fail = prev_op;
-        subset->has_out = true;
-        subset->r_out = var->id;
-
-        /* The jump operation jumps to either the store or subset operation,
-         * depending on whether the store operation already yielded. The 
-         * operation is inserted last, so that the on_fail label of the next 
-         * operation will point to it */
-        jump->kind = EcsRuleJump;
-        
-        /* The pass/fail labels of the Jump operation are not used, since it
-         * jumps to a variable location. Instead, the pass label is (ab)used to
-         * store the label of the SetJmp operation, so that the jump can access
-         * the label it needs to jump to from the setjmp op_ctx. */
-        jump->on_pass = setjmp_lbl;
-        jump->on_fail = -1;
-    }    
+        op->kind = EcsRuleSelect;
+        op->has_out = true;
+        op->r_out = var->id;
+    }
 }
 
 /* Create program from operations that will execute the query */
@@ -1419,7 +1508,7 @@ void compile_program(
             }
             if (obj) {
                 write_variable(rule, obj, c, written);
-            } 
+            }
 
             op = insert_operation(rule, c);
 
@@ -1439,8 +1528,8 @@ void compile_program(
            
             /* If the variable was not written yet, insert a Select */
             } else {
-                insert_select(rule, op, var, c, obj);
-                written[var->id] = true;
+                insert_select(rule, op, var, c, written);
+                var = &rule->variables[v];
             }      
         }
     }
@@ -1736,7 +1825,7 @@ ecs_iter_t ecs_rule_iter(
                 rule->variable_count * ECS_SIZEOF(ecs_rule_reg_t));
         }
         
-        it->op_ctx = ecs_os_malloc(rule->operation_count * 
+        it->op_ctx = ecs_os_calloc(rule->operation_count * 
             ECS_SIZEOF(ecs_rule_op_ctx_t));
 
         if (rule->column_count) {
@@ -1837,6 +1926,10 @@ void set_column(
     ecs_type_t type,
     int32_t column)
 {
+    if (op->column == -1) {
+        return;
+    }
+
     if (type) {
         ecs_entity_t *comp = ecs_vector_get(type, ecs_entity_t, column);
         ecs_assert(comp != NULL, ECS_INTERNAL_ERROR, NULL);
@@ -2114,6 +2207,7 @@ bool eval_select(
          * in most cases eliminates) any searching that needs to occur in a
          * table type. Tables are also registered under wildcards, which is why
          * this operation can simply use the look_for variable directly */
+
         table_set = op_ctx->table_set = find_table_set(world, filter.mask);
     }
 
@@ -2529,6 +2623,7 @@ bool eval_jump(
     int32_t op_index,
     bool redo)
 {
+    /* Passthrough, result is not used for control flow */
     return !redo;
 }
 
@@ -2767,6 +2862,7 @@ bool ecs_rule_next(
         if (!redo && op_index && !is_control_flow(op)) {
             push_registers(it, last_index, op_index);
             push_columns(it, last_index, op_index);
+            it->op_ctx[op_index].last_op = last_index;
         }
 
         /* Dispatch the operation */

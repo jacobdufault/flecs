@@ -48,6 +48,7 @@ void Rules_transitive_fact_true_depth_5(void);
 void Rules_transitive_fact_true_2_relationships(void);
 void Rules_same_pred_obj(void);
 void Rules_same_pred_obj_explicit_subject(void);
+void Rules_transitive_predicate_instances(void);
 
 // Testsuite 'New'
 void New_setup(void);
@@ -1692,6 +1693,10 @@ bake_test_case Rules_testcases[] = {
     {
         "same_pred_obj_explicit_subject",
         Rules_same_pred_obj_explicit_subject
+    },
+    {
+        "transitive_predicate_instances",
+        Rules_transitive_predicate_instances
     }
 };
 
@@ -7253,7 +7258,7 @@ static bake_test_suite suites[] = {
         "Rules",
         NULL,
         NULL,
-        39,
+        40,
         Rules_testcases
     },
     {
