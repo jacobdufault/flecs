@@ -23,7 +23,7 @@
 typedef struct ecs_rule_pair_t {
     uint32_t pred;
     uint32_t obj;
-    int8_t reg_mask; /* bit 1 = predicate, bit 2 = object, bit 4 = wildcard */
+    int32_t reg_mask; /* bit 1 = predicate, bit 2 = object, bit 4 = wildcard */
     bool transitive; /* Is predicate transitive */
 } ecs_rule_pair_t;
 
@@ -42,8 +42,8 @@ typedef struct ecs_rule_filter_t {
     bool obj_wildcard; /* Is object a wildcard */
     bool same_var; /* True if pred & obj are both the same variable */
 
-    int16_t hi_var; /* If hi part should be stored in var, this is the var id */
-    int16_t lo_var; /* If lo part should be stored in var, this is the var id */
+    int32_t hi_var; /* If hi part should be stored in var, this is the var id */
+    int32_t lo_var; /* If lo part should be stored in var, this is the var id */
 } ecs_rule_filter_t;
 
 /* A rule register stores temporary values for rule variables */
@@ -53,22 +53,31 @@ typedef enum ecs_rule_var_kind_t {
     EcsRuleVarKindUnknown
 } ecs_rule_var_kind_t;
 
+typedef struct ecs_rule_table_reg_t {
+    ecs_table_t *table;
+    int32_t offset;
+    int32_t count;
+} ecs_rule_table_reg_t;
+
 typedef struct ecs_rule_reg_t {
-    uint8_t var_id;
+    int32_t var_id;
     union {
         ecs_entity_t entity;
-        ecs_vector_t *type;
-        ecs_table_t *table;
+        ecs_rule_table_reg_t table;
     } is;
 } ecs_rule_reg_t;
 
 /* Operations describe how the rule should be evaluated */
 typedef enum ecs_rule_op_kind_t {
     EcsRuleInput,       /* Input placeholder, first instruction in every rule */
-    EcsRuleDfs,         /* Follows a relationship depth-first */
     EcsRuleSelect,      /* Selects all ables for a given predicate */
     EcsRuleWith,        /* Applies a filter to a table or entity */
+    EcsRuleSubSet,      /* Finds all subsets for transitive relationship */
+    EcsRuleSuperSet,    /* Finds all supersets for a transitive relationship */
+    EcsRuleStore,       /* Store entity in table or entity variable */
     EcsRuleEach,        /* Forwards each entity in a table */
+    EcsRuleSetJmp,      /* Set label for jump operation to one of two values */
+    EcsRuleJump,        /* Jump to an operation label */
     EcsRuleYield        /* Yield result */
 } ecs_rule_op_kind_t;
 
@@ -78,12 +87,12 @@ typedef struct ecs_rule_op_t {
     ecs_rule_pair_t param;      /* Parameter that contains optional filter */
     ecs_entity_t subject;       /* If set, operation has a constant subject */
 
-    int16_t on_ok;              /* Jump location when match succeeds */
-    int16_t on_fail;            /* Jump location when match fails */
+    int32_t on_pass;              /* Jump location when match succeeds */
+    int32_t on_fail;            /* Jump location when match fails */
 
-    int8_t column;              /* Corresponding column index in signature */
-    uint8_t r_in;               /* Optional In/Out registers */
-    uint8_t r_out;
+    int32_t column;              /* Corresponding column index in signature */
+    int32_t r_in;               /* Optional In/Out registers */
+    int32_t r_out;
 
     bool has_in, has_out;       /* Keep track of whether operation uses input
                                  * and/or output registers. This helps with
@@ -99,39 +108,38 @@ typedef struct ecs_rule_with_ctx_t {
                                  * wildcard. Used for transitive queries */
 } ecs_rule_with_ctx_t;
 
-typedef struct ecs_rule_dfs_frame_t {
+typedef struct ecs_rule_subset_frame_t {
     ecs_rule_with_ctx_t with_ctx;
     ecs_table_t *table;
     int32_t row;
     int32_t column;
-} ecs_rule_dfs_frame_t;
+} ecs_rule_subset_frame_t;
 
 /* Follow context */
-typedef struct ecs_rule_dfs_ctx_t {
-    ecs_rule_dfs_frame_t storage[16]; /* Alloc-free array for small trees */
-    ecs_rule_dfs_frame_t *stack;
+typedef struct ecs_rule_subset_ctx_t {
+    ecs_rule_subset_frame_t storage[16]; /* Alloc-free array for small trees */
+    ecs_rule_subset_frame_t *stack;
     int32_t sp;
-} ecs_rule_dfs_ctx_t;
+} ecs_rule_subset_ctx_t;
 
 /* Each context */
 typedef struct ecs_rule_each_ctx_t {
     int32_t row;                /* Currently evaluated row in evaluated table */
 } ecs_rule_each_ctx_t;
 
-/* From operation context */
-typedef struct ecs_rule_from_ctx_t {
-    ecs_type_t type;            /* Currently evaluated type */
-    int32_t column;             /* Currently evaluated column in type */
-} ecs_rule_from_ctx_t;
+/* Jump context */
+typedef struct ecs_rule_setjmp_ctx_t {
+    int32_t label;             /* Operation label to jump to */
+} ecs_rule_setjmp_ctx_t;
 
 /* Operation context. This is a per-operation, per-iterator structure that
  * stores information for stateful operations. */
 typedef struct ecs_rule_op_ctx_t {
     union {
-        ecs_rule_dfs_ctx_t dfs;
+        ecs_rule_subset_ctx_t subset;
         ecs_rule_with_ctx_t with;
         ecs_rule_each_ctx_t each;
-        ecs_rule_from_ctx_t from;
+        ecs_rule_setjmp_ctx_t setjmp;
     } is;
 } ecs_rule_op_ctx_t;
 
@@ -161,7 +169,7 @@ struct ecs_rule_t {
 
 static
 void rule_error(
-    ecs_rule_t *rule,
+    const ecs_rule_t *rule,
     const char *fmt,
     ...)
 {
@@ -176,7 +184,7 @@ static
 ecs_rule_op_t* create_operation(
     ecs_rule_t *rule)
 {
-    int8_t cur = rule->operation_count ++;
+    int32_t cur = rule->operation_count ++;
     rule->operations = ecs_os_realloc(
         rule->operations, (cur + 1) * ECS_SIZEOF(ecs_rule_op_t));
 
@@ -191,7 +199,7 @@ ecs_rule_var_t* create_variable(
     ecs_rule_var_kind_t kind,
     const char *name)
 {
-    uint8_t cur = ++ rule->variable_count;
+    int32_t cur = ++ rule->variable_count;
     rule->variables = ecs_os_realloc(
         rule->variables, cur * ECS_SIZEOF(ecs_rule_var_t));
 
@@ -342,6 +350,149 @@ int32_t* get_columns(
     return &it->columns[op * it->rule->column_count];
 }
 
+static
+ecs_table_t* table_from_entity(
+    ecs_world_t *world,
+    ecs_entity_t e)
+{
+    ecs_record_t *record = ecs_eis_get(world, e);
+    if (record) {
+        return record->table;
+    } else {
+        return NULL;
+    }
+}
+
+static
+void entity_reg_set(
+    const ecs_rule_t *rule,
+    ecs_rule_reg_t *regs,
+    int32_t r,
+    ecs_entity_t entity)
+{
+    ecs_assert(rule->variables[regs[r].var_id].kind == EcsRuleVarKindEntity, 
+        ECS_INTERNAL_ERROR, NULL);
+
+    regs[r].is.entity = entity;
+}
+
+static 
+ecs_entity_t entity_reg_get(
+    const ecs_rule_t *rule,
+    ecs_rule_reg_t *regs,
+    int32_t r)
+{
+    ecs_assert(rule->variables[regs[r].var_id].kind == EcsRuleVarKindEntity, 
+        ECS_INTERNAL_ERROR, NULL);
+    
+    return regs[r].is.entity;
+}
+
+static
+void table_reg_set(
+    const ecs_rule_t *rule,
+    ecs_rule_reg_t *regs,
+    int32_t r,
+    ecs_table_t *table)
+{
+    ecs_assert(rule->variables[regs[r].var_id].kind == EcsRuleVarKindTable, 
+        ECS_INTERNAL_ERROR, NULL);
+
+    regs[r].is.table.table = table;
+    regs[r].is.table.offset = 0;
+    regs[r].is.table.count = 0;
+}
+
+static 
+ecs_table_t* table_reg_get(
+    const ecs_rule_t *rule,
+    ecs_rule_reg_t *regs,
+    int32_t r)
+{
+    ecs_assert(rule->variables[regs[r].var_id].kind == EcsRuleVarKindTable, 
+        ECS_INTERNAL_ERROR, NULL);
+
+    return regs[r].is.table.table;       
+}
+
+static
+ecs_entity_t reg_get_entity(
+    const ecs_rule_t *rule,
+    ecs_rule_op_t *op,
+    ecs_rule_reg_t *regs,
+    int32_t r)
+{
+    if (r == UINT8_MAX) {
+        ecs_assert(op->subject != 0, ECS_INTERNAL_ERROR, NULL);
+        return op->subject;
+    }
+    if (rule->variables[r].kind == EcsRuleVarKindTable) {
+        int32_t count = regs[r].is.table.count;
+        int32_t offset = regs[r].is.table.offset;
+
+        ecs_assert(count == 1, ECS_INTERNAL_ERROR, NULL);
+        ecs_data_t *data = ecs_table_get_data(table_reg_get(rule, regs, r));
+        ecs_assert(data != NULL, ECS_INTERNAL_ERROR, NULL);
+        ecs_entity_t *entities = ecs_vector_first(data->entities, ecs_entity_t);
+        ecs_assert(entities != NULL, ECS_INTERNAL_ERROR, NULL);
+        ecs_assert(offset < ecs_vector_count(data->entities), 
+            ECS_INTERNAL_ERROR, NULL);
+        
+        return entities[offset];
+    }
+    if (rule->variables[r].kind == EcsRuleVarKindEntity) {
+        return entity_reg_get(rule, regs, r);
+    }
+
+    /* Must return an entity */
+    ecs_assert(false, ECS_INTERNAL_ERROR, NULL);
+
+    return 0;
+}
+
+static
+ecs_table_t* reg_get_table(
+    const ecs_rule_t *rule,
+    ecs_rule_op_t *op,
+    ecs_rule_reg_t *regs,
+    int32_t r)
+{
+    if (r == UINT8_MAX) {
+        ecs_assert(op->subject != 0, ECS_INTERNAL_ERROR, NULL);
+        return table_from_entity(rule->world, op->subject);
+    }
+    if (rule->variables[r].kind == EcsRuleVarKindTable) {
+        return table_reg_get(rule, regs, r);
+    }
+    if (rule->variables[r].kind == EcsRuleVarKindEntity) {
+        return table_from_entity(rule->world, entity_reg_get(rule, regs, r));
+    } 
+    return NULL;
+}
+
+static
+void reg_set_entity(
+    const ecs_rule_t *rule,
+    ecs_rule_reg_t *regs,
+    int32_t r,
+    ecs_entity_t entity)
+{
+    if (rule->variables[r].kind == EcsRuleVarKindTable) {
+        ecs_world_t *world = rule->world;
+        ecs_record_t *record = ecs_eis_get(world, entity);
+        if (!record) {
+            rule_error(rule, "failed to store entity %d, has no table", entity);
+        } else {
+            bool is_monitored;
+            regs[r].is.table.table = record->table;
+            regs[r].is.table.offset = ecs_record_to_row(record->row, &is_monitored);
+            regs[r].is.table.count = 1;
+        }
+    } else {
+        entity_reg_set(rule, regs, r, entity);
+    }
+}
+
 /* This encodes a column expression into a pair. A pair stores information about
  * the variable(s) associated with the column. Pairs are used by operations to
  * apply filters, and when there is a match, to reify variables. */
@@ -465,7 +616,7 @@ ecs_rule_filter_t pair_to_filter(
     ecs_rule_reg_t *regs = get_registers(it, it->op - 1);
 
     if (pair.reg_mask & RULE_PAIR_OBJECT) {
-        obj = regs[obj].is.entity;
+        obj = entity_reg_get(it->rule, regs, obj);
         if (obj == EcsWildcard) {
             result.wildcard = true;
             result.obj_wildcard = true;
@@ -474,7 +625,7 @@ ecs_rule_filter_t pair_to_filter(
     }
 
     if (pair.reg_mask & RULE_PAIR_PREDICATE) {
-        pred = regs[pred].is.entity;
+        pred = entity_reg_get(it->rule, regs, pred);
         if (pred == EcsWildcard) {
             if (result.wildcard) {
                 result.same_var = pair.pred == pair.obj;
@@ -578,21 +729,22 @@ void reify_variables(
     ecs_entity_t *elem = ecs_vector_get(type, ecs_entity_t, column);
     ecs_assert(elem != NULL, ECS_INTERNAL_ERROR, NULL);
 
-    int16_t lo_var = filter->lo_var;
-    int16_t hi_var = filter->hi_var;
+    int32_t lo_var = filter->lo_var;
+    int32_t hi_var = filter->hi_var;
 
     if (lo_var != -1) {
         ecs_assert(vars[lo_var].kind == EcsRuleVarKindEntity, 
             ECS_INTERNAL_ERROR, NULL);
 
-        regs[lo_var].is.entity = ecs_entity_t_lo(*elem);
+        entity_reg_set(rule, regs, lo_var, ecs_entity_t_lo(*elem));
     }
 
     if (hi_var != -1) {
         ecs_assert(vars[hi_var].kind == EcsRuleVarKindEntity, 
             ECS_INTERNAL_ERROR, NULL);            
 
-        regs[hi_var].is.entity = ecs_entity_t_hi(*elem & ECS_COMPONENT_MASK);
+        entity_reg_set(rule, regs, hi_var, 
+            ecs_entity_t_hi(*elem & ECS_COMPONENT_MASK));
     }
 }
 
@@ -616,14 +768,14 @@ bool is_subject(
 }
 
 static
-uint8_t get_variable_depth(
+int32_t get_variable_depth(
     ecs_rule_t *rule,
     ecs_rule_var_t *var,
     ecs_rule_var_t *root,
     int recur);
 
 static
-uint8_t crawl_variable(
+int32_t crawl_variable(
     ecs_rule_t *rule,
     ecs_rule_var_t *var,
     ecs_rule_var_t *root,
@@ -664,7 +816,7 @@ uint8_t crawl_variable(
 }
 
 static
-uint8_t get_depth_from_var(
+int32_t get_depth_from_var(
     ecs_rule_t *rule,
     ecs_rule_var_t *var,
     ecs_rule_var_t *root,
@@ -682,7 +834,7 @@ uint8_t get_depth_from_var(
     
     /* Variable is not yet being evaluated and depth has not yet been set. 
      * Calculate depth. */
-    uint8_t depth = get_variable_depth(rule, var, root, recur + 1);
+    int32_t depth = get_variable_depth(rule, var, root, recur + 1);
     if (depth == UINT8_MAX) {
         return depth;
     } else {
@@ -691,7 +843,7 @@ uint8_t get_depth_from_var(
 }
 
 static
-uint8_t get_depth_from_term(
+int32_t get_depth_from_term(
     ecs_rule_t *rule,
     ecs_rule_var_t *cur,
     ecs_rule_var_t *pred,
@@ -699,7 +851,7 @@ uint8_t get_depth_from_term(
     ecs_rule_var_t *root,
     int recur)
 {
-    uint8_t result = UINT8_MAX;
+    int32_t result = UINT8_MAX;
 
     ecs_assert(cur != pred || cur != obj, ECS_INTERNAL_ERROR, NULL);
 
@@ -711,7 +863,7 @@ uint8_t get_depth_from_term(
         /* If this is a variable that is not the same as the current, 
          * we can use it to determine dependency depth. */
         if (pred && cur != pred) {
-            uint8_t depth = get_depth_from_var(rule, pred, root, recur);
+            int32_t depth = get_depth_from_var(rule, pred, root, recur);
             if (depth == UINT8_MAX) {
                 return UINT8_MAX;
             }
@@ -724,7 +876,7 @@ uint8_t get_depth_from_term(
 
         /* Same for obj */
         if (obj && cur != obj) {
-            uint8_t depth = get_depth_from_var(rule, obj, root, recur);
+            int32_t depth = get_depth_from_var(rule, obj, root, recur);
             if (depth == UINT8_MAX) {
                 return UINT8_MAX;
             }
@@ -740,7 +892,7 @@ uint8_t get_depth_from_term(
 
 /* Find the depth of the dependency tree from the variable to the root */
 static
-uint8_t get_variable_depth(
+int32_t get_variable_depth(
     ecs_rule_t *rule,
     ecs_rule_var_t *var,
     ecs_rule_var_t *root,
@@ -755,7 +907,7 @@ uint8_t get_variable_depth(
         rule->sig.columns, ecs_sig_column_t);
 
     int32_t i, count = rule->column_count;
-    uint8_t result = UINT8_MAX;
+    int32_t result = UINT8_MAX;
 
     for (i = 0; i < count; i ++) {
         ecs_sig_column_t *column = &columns[i];
@@ -777,7 +929,7 @@ uint8_t get_variable_depth(
             obj = NULL;
         }
 
-        uint8_t depth = get_depth_from_term(rule, var, pred, obj, root, recur);
+        int32_t depth = get_depth_from_term(rule, var, pred, obj, root, recur);
         if (depth < result) {
             result = depth;
         }
@@ -900,15 +1052,15 @@ int scan_variables(
     ecs_rule_t *rule)
 {
     /* Objects found in rule. One will be elected root */
-    uint16_t subject_count = 0;
+    int32_t subject_count = 0;
 
     /* If this (.) is found, it always takes precedence in root election */
-    uint8_t this_var = UINT8_MAX;
+    int32_t this_var = UINT8_MAX;
 
     /* Keep track of the subject variable that occurs the most. In the absence of
      * this (.) the variable with the most occurrences will be elected root. */
-    uint8_t max_occur = 0;
-    uint8_t max_occur_var = UINT8_MAX;
+    int32_t max_occur = 0;
+    int32_t max_occur_var = UINT8_MAX;
 
     /* Step 1: find all possible roots */
     ecs_sig_column_t *columns = ecs_vector_first(rule->sig.columns, ecs_sig_column_t);
@@ -944,7 +1096,7 @@ int scan_variables(
 
     /* Step 2: elect a root. This is either this (.) or the variable with the
      * most occurrences. */
-    uint8_t root_var = this_var;
+    int32_t root_var = this_var;
     if (root_var == UINT8_MAX) {
         root_var = max_occur_var;
         if (root_var == UINT8_MAX) {
@@ -991,7 +1143,7 @@ ecs_rule_op_t* insert_operation(
     int32_t column_index)
 {
     ecs_rule_op_t *op = create_operation(rule);
-    op->on_ok = rule->operation_count;
+    op->on_pass = rule->operation_count;
     op->on_fail = rule->operation_count - 2;
 
     /* Parse the column's type into a pair. A pair extracts the ids from
@@ -1054,70 +1206,179 @@ void write_variable(
     written[evar->id] = true;
 }
 
-ecs_rule_t* ecs_rule_new(
-    ecs_world_t *world,
-    const char *expr)
+/* Insert first operation, which is always Input. This creates an entry in
+ * the register stack for the initial state. */
+static
+void insert_input(
+    ecs_rule_t *rule)
 {
-    ecs_rule_t *result = ecs_os_calloc(ECS_SIZEOF(ecs_rule_t));
-
-    /* Parse the signature expression. This initializes the columns array which
-     * contains the information about which components/pairs are requested. */
-    if (ecs_sig_init(world, NULL, expr, &result->sig)) {
-        ecs_os_free(result);
-        return NULL;
-    }
-
-    ecs_sig_t *sig = &result->sig;
-    ecs_sig_column_t *columns = ecs_vector_first(sig->columns, ecs_sig_column_t);
-    int32_t v, c, column_count = ecs_vector_count(sig->columns);
-
-    result->world = world;
-    result->column_count = column_count;
-
-    /* Create first operation, which is always Input. This creates an entry in
-     * the register stack for the initial state. */
-    ecs_rule_op_t *op = create_operation(result);
+    ecs_rule_op_t *op = create_operation(rule);
     op->kind = EcsRuleInput;
 
     /* The first time Input is evaluated it goes to the next/first operation */
-    op->on_ok = 1;
+    op->on_pass = 1;
 
     /* When Input is evaluated with redo = true it will return false, which will
      * finish the program as op becomes -1. */
-    op->on_fail = -1;
+    op->on_fail = -1;  
+}
 
-    /* Find all variables & resolve dependencies */
-    if (scan_variables(result) != 0) {
-        goto error;
+/* Insert last operation, which is always Yield. When the program hits Yield,
+ * data is returned to the application. */
+static
+void insert_yield(
+    ecs_rule_t *rule)
+{
+    ecs_rule_op_t *op = create_operation(rule);
+    op->kind = EcsRuleYield;
+    op->has_in = true;
+    op->on_fail = rule->operation_count - 2;
+    /* Yield can only "fail" since it is the end of the program */
+
+    /* Find variable associated with this. It is possible that the variable
+     * exists both as a table and as an entity. This can happen when a rule
+     * first selects a table for this, but then subsequently needs to evaluate
+     * each entity in that table. In that case the yield instruction should
+     * return the entity, so look for that first. */
+    ecs_rule_var_t *var = find_variable(rule, EcsRuleVarKindEntity, ".");
+    if (!var) {
+        var = find_variable(rule, EcsRuleVarKindTable, ".");
     }
 
+    /* If there is no this, there is nothing to yield. In that case the rule
+     * simply returns true or false. */
+    if (!var) {
+        op->r_in = UINT8_MAX;
+    } else {
+        op->r_in = var->id;
+    }
+}
+
+/* Insert select operation. A select returns all tables that match a pattern */
+static
+void insert_select(
+    ecs_rule_t *rule,
+    ecs_rule_op_t *op,
+    ecs_rule_var_t *var,
+    int32_t c,
+    ecs_rule_var_t *obj)
+{
+    /* If this the param is not transitive, a normal select will do */
+    if (!op->param.transitive) {
+        op->kind = EcsRuleSelect;
+        op->has_out = true;
+        op->r_out = var->id;
+
+    /* If the param is transitive, we need to insert a SubSet operation which
+     * does a depth-first search to iterate the transitive relationship. By
+     * default, iterating a transitive relationship als includes the root of the
+     * tree, so that when iterating all subsets of Animal, Animal itself is also
+     * returned. This requires combining a Store with a SubSet */
+    } else {
+        int32_t setjmp_lbl = rule->operation_count - 1;
+        int32_t store_lbl = setjmp_lbl + 1;
+        int32_t subset_lbl = setjmp_lbl + 2;
+        int32_t next_op = setjmp_lbl + 4;
+        int32_t prev_op = setjmp_lbl - 1;
+
+        /* Insert 3 operations at once, so we don't have to worry about how
+         * the instruction array reallocs */
+        insert_operation(rule, c);
+        insert_operation(rule, c);
+        op = insert_operation(rule, c);
+
+        ecs_rule_op_t *setjmp = op - 3;
+        ecs_rule_op_t *store = op - 2;
+        ecs_rule_op_t *subset = op - 1;
+        ecs_rule_op_t *jump = op;
+
+        /* The SetJmp operation stores a conditional jump label that either
+         * points to the Store or SubSet operation */
+        setjmp->kind = EcsRuleSetJmp;
+        setjmp->on_pass = store_lbl;
+        setjmp->on_fail = subset_lbl;
+
+        /* The Store operation yields the root of the subtree. After yielding,
+         * this operation will fail and return to SetJmp, which will cause it
+         * to switch to the SubSet operation. */
+        store->kind = EcsRuleStore;
+        store->on_pass = next_op;
+        store->on_fail = setjmp_lbl;
+        store->has_in = true;
+        store->has_out = true;
+        store->r_out = var->id;
+
+        /* If the object of the filter is not a variable, store literal */
+        if (!obj) {
+            store->r_in = UINT8_MAX;
+            store->subject = store->param.obj;
+        } else {
+            store->r_in = obj->id;
+        }
+
+        /* The SubSet operation yields tables that are subsets of the root */
+        subset->kind = EcsRuleSubSet;
+        subset->on_pass = next_op;
+        subset->on_fail = prev_op;
+        subset->has_out = true;
+        subset->r_out = var->id;
+
+        /* The jump operation jumps to either the store or subset operation,
+         * depending on whether the store operation already yielded. The 
+         * operation is inserted last, so that the on_fail label of the next 
+         * operation will point to it */
+        jump->kind = EcsRuleJump;
+        
+        /* The pass/fail labels of the Jump operation are not used, since it
+         * jumps to a variable location. Instead, the pass label is (ab)used to
+         * store the label of the SetJmp operation, so that the jump can access
+         * the label it needs to jump to from the setjmp op_ctx. */
+        jump->on_pass = setjmp_lbl;
+        jump->on_fail = -1;
+    }    
+}
+
+/* Create program from operations that will execute the query */
+static
+void compile_program(
+    ecs_world_t *world,
+    ecs_rule_t *rule)
+{
     /* Trace which variables have been written while inserting instructions.
      * This determines which instruction needs to be inserted */
     bool written[ECS_RULE_MAX_VARIABLE_COUNT] = { false };
+
+    ecs_sig_t *sig = &rule->sig;
+    ecs_sig_column_t *columns = ecs_vector_first(sig->columns, ecs_sig_column_t);
+    int32_t v, c, column_count = ecs_vector_count(sig->columns);
+    ecs_rule_op_t *op;
+
+    /* Insert input, which is always the first instruction */
+    insert_input(rule);
 
     /* First insert all instructions that do not have a variable subject. Such
      * instructions iterate the type of an entity literal and are usually good
      * candidates for quickly narrowing down the set of potential results. */
     for (c = 0; c < column_count; c ++) {
         ecs_sig_column_t *column = &columns[c];
-        ecs_rule_var_t* subj = column_subj(result, column);
+        ecs_rule_var_t* subj = column_subj(rule, column);
         if (subj) {
             continue;
         }
 
         /* If predicate and/or object are variables, mark them as written */
         ecs_rule_var_t 
-        *pred = column_pred(result, column),
-        *obj = column_obj(result, column);
+        *pred = column_pred(rule, column),
+        *obj = column_obj(rule, column);
 
         if (pred) {
-            write_variable(result, pred, c, written);
+            write_variable(rule, pred, c, written);
         }
         if (obj) {
-            write_variable(result, obj, c, written);
+            write_variable(rule, obj, c, written);
         } 
 
-        op = insert_operation(result, c);
+        op = insert_operation(rule, c);
         op->kind = EcsRuleWith;
         op->r_in = UINT8_MAX; /* Indicate literal */
         op->has_in = true;
@@ -1126,8 +1387,8 @@ ecs_rule_t* ecs_rule_new(
     }
 
     /* Insert variables based on dependency order */
-    for (v = 0; v < result->subject_variable_count; v ++) {
-        ecs_rule_var_t *var = &result->variables[v];
+    for (v = 0; v < rule->subject_variable_count; v ++) {
+        ecs_rule_var_t *var = &rule->variables[v];
 
         ecs_assert(var->kind == EcsRuleVarKindTable, ECS_INTERNAL_ERROR, NULL);
 
@@ -1135,13 +1396,13 @@ ecs_rule_t* ecs_rule_new(
             ecs_sig_column_t *column = &columns[c];
 
             /* Only process columns for which variable is subject */
-            ecs_rule_var_t* subj = column_subj(result, column);
+            ecs_rule_var_t* subj = column_subj(rule, column);
             if (subj != var) {
                 continue;
             }
 
             bool entity_written = false, table_written = written[var->id];
-            ecs_rule_var_t *entity_var = find_variable(result, 
+            ecs_rule_var_t *entity_var = find_variable(rule, 
                 EcsRuleVarKindEntity, var->name);
             if (entity_var) {
                 entity_written = written[entity_var->id];
@@ -1150,17 +1411,17 @@ ecs_rule_t* ecs_rule_new(
             /* Mark predicate & object variables as entities, as they will be 
              * written by the operation */
             ecs_rule_var_t 
-            *pred = column_pred(result, column),
-            *obj = column_obj(result, column);
+            *pred = column_pred(rule, column),
+            *obj = column_obj(rule, column);
 
             if (pred) {
-                write_variable(result, pred, c, written);
+                write_variable(rule, pred, c, written);
             }
             if (obj) {
-                write_variable(result, obj, c, written);
+                write_variable(rule, obj, c, written);
             } 
 
-            op = insert_operation(result, c);
+            op = insert_operation(rule, c);
 
             /* If the variable is already written as an entity, use From so the
              * filter is applied to the type of the entity. */
@@ -1176,34 +1437,25 @@ ecs_rule_t* ecs_rule_new(
                 op->has_in = true;
                 op->r_in = var->id;
            
-            /* If the variable was not written yet, insert a select */
+            /* If the variable was not written yet, insert a Select */
             } else {
-                if (op->param.transitive) {
-                    op->kind = EcsRuleDfs;
-                } else {
-                    op->kind = EcsRuleSelect;
-                }
-
-                op->has_out = true;
-                op->r_out = var->id;
-
-                /* A select reifies the table variable */
+                insert_select(rule, op, var, c, obj);
                 written[var->id] = true;
             }      
         }
     }
 
     /* Verify all subject variables have been written. Subject variables are of
-     * the table type, and a select/dfs should have been inserted for each */
-    for (v = 0; v < result->subject_variable_count; v ++) {
+     * the table type, and a select/subset should have been inserted for each */
+    for (v = 0; v < rule->subject_variable_count; v ++) {
         if (!written[v]) {
             /* If the table variable hasn't been written, this can only happen
-             * if an instruction wrote the variable before a select/dfs could
+             * if an instruction wrote the variable before a select/subset could
              * have been inserted for it. Make sure that this is the case by
              * testing if an entity variable exists and whether it has been
              * written. */
             ecs_rule_var_t *var = find_variable(
-                result, EcsRuleVarKindEntity, result->variables[v].name);
+                rule, EcsRuleVarKindEntity, rule->variables[v].name);
             ecs_assert(written[var->id], ECS_INTERNAL_ERROR, NULL);
         }
     }
@@ -1214,14 +1466,14 @@ ecs_rule_t* ecs_rule_new(
      * variables are correctly returned by the iterator. When an entity variable
      * hasn't been written yet at this point, it is because it only constrained
      * through a common predicate or object. */
-    for (; v < result->variable_count; v ++) {
+    for (; v < rule->variable_count; v ++) {
         if (!written[v]) {
-            ecs_rule_var_t *var = &result->variables[v];
+            ecs_rule_var_t *var = &rule->variables[v];
             ecs_assert(var->kind == EcsRuleVarKindEntity, 
                 ECS_INTERNAL_ERROR, NULL);
 
             ecs_rule_var_t *table_var = find_variable(
-                result, EcsRuleVarKindTable, var->name);
+                rule, EcsRuleVarKindTable, var->name);
             
             /* A table variable must exist if the variable hasn't been resolved
              * yet. If there doesn't exist one, this could indicate an 
@@ -1230,7 +1482,7 @@ ecs_rule_t* ecs_rule_new(
 
             /* Insert each operation that takes the table variable as input, and
              * yields each entity in the table */
-            op = insert_operation(result, -1);
+            op = insert_operation(rule, -1);
             op->kind = EcsRuleEach;
             op->r_in = table_var->id;
             op->r_out = var->id;
@@ -1240,30 +1492,32 @@ ecs_rule_t* ecs_rule_new(
         }
     }     
 
-    /* Insert yield instruction */
-    op = create_operation(result);
-    op->kind = EcsRuleYield;
-    op->has_in = true;
-    op->on_fail = result->operation_count - 2;
-    /* Yield can only fail since it is the end of the program */
+    /* Insert yield, which is always the last operation */
+    insert_yield(rule);
+}
 
-    /* Find variable associated with this. It is possible that the variable
-     * exists both as a table and as an entity. This can happen when a rule
-     * first selects a table for this, but then subsequently needs to evaluate
-     * each entity in that table. In that case the yield instruction should
-     * return the entity, so look for that first. */
-    ecs_rule_var_t *var = find_variable(result, EcsRuleVarKindEntity, ".");
-    if (!var) {
-        var = find_variable(result, EcsRuleVarKindTable, ".");
+ecs_rule_t* ecs_rule_new(
+    ecs_world_t *world,
+    const char *expr)
+{
+    ecs_rule_t *result = ecs_os_calloc(ECS_SIZEOF(ecs_rule_t));
+
+    /* Parse the signature expression. This initializes the columns array which
+     * contains the information about which components/pairs are requested. */
+    if (ecs_sig_init(world, NULL, expr, &result->sig)) {
+        ecs_os_free(result);
+        return NULL;
     }
 
-    /* If there is no this, there is nothing to yield. In that case the rule
-     * simply returns true or false. */
-    if (!var) {
-        op->r_in = UINT8_MAX;
-    } else {
-        op->r_in = var->id;
+    result->world = world;
+    result->column_count = ecs_vector_count(result->sig.columns);
+
+    /* Find all variables & resolve dependencies */
+    if (scan_variables(result) != 0) {
+        goto error;
     }
+
+    compile_program(world, result);
 
     return result;
 error:
@@ -1290,7 +1544,7 @@ void ecs_rule_free(
 /* Quick convenience function to get a variable from an id */
 ecs_rule_var_t* get_variable(
     const ecs_rule_t *rule,
-    uint8_t var_id)
+    int32_t var_id)
 {
     if (var_id == UINT8_MAX) {
         return NULL;
@@ -1332,15 +1586,11 @@ char* ecs_rule_str(
         }
 
         ecs_strbuf_append(&buf, "%d: [Pass:%d, Fail:%d] ", i, 
-            op->on_ok, op->on_fail);
+            op->on_pass, op->on_fail);
 
         bool has_filter = false;
 
         switch(op->kind) {
-        case EcsRuleDfs:
-            ecs_strbuf_append(&buf, "dfs");
-            has_filter = true;
-            break;
         case EcsRuleSelect:
             ecs_strbuf_append(&buf, "select");
             has_filter = true;
@@ -1349,9 +1599,26 @@ char* ecs_rule_str(
             ecs_strbuf_append(&buf, "with  ");
             has_filter = true;
             break;
+        case EcsRuleStore:
+            ecs_strbuf_append(&buf, "store ");
+            break;
+        case EcsRuleSuperSet:
+            ecs_strbuf_append(&buf, "superset ");
+            has_filter = true;
+            break;             
+        case EcsRuleSubSet:
+            ecs_strbuf_append(&buf, "subset ");
+            has_filter = true;
+            break;            
         case EcsRuleEach:
             ecs_strbuf_append(&buf, "each  ");
             break;
+        case EcsRuleSetJmp:
+            ecs_strbuf_append(&buf, "setjmp  ");
+            break;
+        case EcsRuleJump:
+            ecs_strbuf_append(&buf, "jump  ");
+            break;            
         case EcsRuleYield:
             ecs_strbuf_append(&buf, "yield ");
             break;
@@ -1446,7 +1713,7 @@ ecs_entity_t ecs_rule_variable(
     /* We can only return entity variables */
     if (it->rule->variables[var_id].kind == EcsRuleVarKindEntity) {
         ecs_rule_reg_t *regs = get_registers(it, it->op);
-        return regs[var_id].is.entity;
+        return entity_reg_get(it->rule, regs, var_id);
     } else {
         return 0;
     }
@@ -1482,7 +1749,12 @@ ecs_iter_t ecs_rule_iter(
 
     int i;
     for (i = 0; i < rule->variable_count; i ++) {
-        it->registers[i].is.entity = EcsWildcard;
+        it->registers[i].var_id = i;
+        if (rule->variables[i].kind == EcsRuleVarKindEntity) {
+            entity_reg_set(rule, it->registers, i, EcsWildcard);
+        } else {
+            table_reg_set(rule, it->registers, i, NULL);
+        }
     }
     
     result.column_count = rule->column_count;
@@ -1559,48 +1831,19 @@ ecs_sparse_t* find_table_set(
 }
 
 static
-ecs_table_t* table_from_entity(
-    ecs_world_t *world,
-    ecs_entity_t e)
-{
-    ecs_record_t *record = ecs_eis_get(world, e);
-    if (record) {
-        return record->table;
-    } else {
-        return NULL;
-    }
-}
-
-static
-ecs_table_t* table_from_reg(
-    const ecs_rule_t *rule,
-    ecs_rule_op_t *op,
-    ecs_rule_reg_t *regs,
-    uint8_t r)
-{
-    if (r == UINT8_MAX) {
-        ecs_assert(op->subject != 0, ECS_INTERNAL_ERROR, NULL);
-        return table_from_entity(rule->world, op->subject);
-    }
-    if (rule->variables[r].kind == EcsRuleVarKindTable) {
-        return regs[r].is.table;
-    }
-    if (rule->variables[r].kind == EcsRuleVarKindEntity) {
-        return table_from_entity(rule->world, regs[r].is.entity);
-    } 
-    return NULL;
-}
-
-static
 void set_column(
     ecs_rule_iter_t *it,
     ecs_rule_op_t *op,
     ecs_type_t type,
     int32_t column)
 {
-    ecs_entity_t *comp = ecs_vector_get(type, ecs_entity_t, column);
-    ecs_assert(comp != NULL, ECS_INTERNAL_ERROR, NULL);
-    it->table.components[op->column] = *comp;
+    if (type) {
+        ecs_entity_t *comp = ecs_vector_get(type, ecs_entity_t, column);
+        ecs_assert(comp != NULL, ECS_INTERNAL_ERROR, NULL);
+        it->table.components[op->column] = *comp;
+    } else {
+        it->table.components[op->column] = 0;
+    }
 }
 
 /* Test if provided object has a transitive relationship with the filter */
@@ -1672,7 +1915,7 @@ static
 bool eval_input(
     ecs_rule_iter_t *it,
     ecs_rule_op_t *op,
-    int16_t op_index,
+    int32_t op_index,
     bool redo)
 {
     if (!redo) {
@@ -1687,22 +1930,22 @@ bool eval_input(
 }
 
 static
-bool eval_dfs(
+bool eval_subset(
     ecs_rule_iter_t *it,
     ecs_rule_op_t *op,
-    int16_t op_index,
+    int32_t op_index,
     bool redo)
 {
     const ecs_rule_t  *rule = it->rule;
     ecs_world_t *world = rule->world;
-    ecs_rule_dfs_ctx_t *op_ctx = &it->op_ctx[op_index].is.dfs;
-    ecs_rule_dfs_frame_t *frame = NULL;
+    ecs_rule_subset_ctx_t *op_ctx = &it->op_ctx[op_index].is.subset;
+    ecs_rule_subset_frame_t *frame = NULL;
     ecs_table_record_t table_record;
     ecs_rule_reg_t *regs = get_registers(it, op_index);
 
     /* Get register indices for output */
-    int32_t sp, row, column;
-    uint8_t r = op->r_out;
+    int32_t sp, row;
+    int32_t r = op->r_out;
     ecs_assert(r != UINT8_MAX, ECS_INTERNAL_ERROR, NULL);
 
     /* Get queried for id, fill out potential variables */
@@ -1731,9 +1974,9 @@ bool eval_dfs(
             return false;
         }
 
-        regs[r].is.table = frame->table = table_record.table;
         frame->row = 0;
         frame->column = table_record.column;
+        table_reg_set(rule, regs, r, (frame->table = table_record.table));
         set_column(it, op, table_record.table->type, table_record.column);
         return true;
     }
@@ -1744,7 +1987,6 @@ bool eval_dfs(
         table = frame->table;
         table_set = frame->with_ctx.table_set;
         row = frame->row;
-        column = frame->column;
 
         /* If row exceeds number of elements in table, find next table in frame that
          * still has entities */
@@ -1755,9 +1997,9 @@ bool eval_dfs(
                 table = frame->table = table_record.table;
                 ecs_assert(table != NULL, ECS_INTERNAL_ERROR, NULL);
                 row = frame->row = 0;
-                column = frame->column = table_record.column;
+                frame->column = table_record.column;
                 set_column(it, op, table_record.table->type, table_record.column);
-                regs[r].is.table = table;
+                table_reg_set(rule, regs, r, table);
                 return true;
             } else {
                 sp = -- op_ctx->sp;
@@ -1801,7 +2043,7 @@ bool eval_dfs(
 
             /* If table set is found, find first non-empty table */
             if (table_set) {
-                ecs_rule_dfs_frame_t *new_frame = &op_ctx->stack[sp + 1];
+                ecs_rule_subset_frame_t *new_frame = &op_ctx->stack[sp + 1];
                 new_frame->with_ctx.table_set = table_set;
                 new_frame->with_ctx.table_index = -1;
                 table_record = find_next_table(table_set, &filter, &new_frame->with_ctx);
@@ -1824,7 +2066,7 @@ bool eval_dfs(
         } while (!table && row < row_count);
     } while (!table);
 
-    regs[r].is.table = table;
+    table_reg_set(rule, regs, r, table);
     set_column(it, op, table->type, frame->column);
 
     return true;
@@ -1836,7 +2078,7 @@ static
 bool eval_select(
     ecs_rule_iter_t *it,
     ecs_rule_op_t *op,
-    int16_t op_index,
+    int32_t op_index,
     bool redo)
 {
     const ecs_rule_t  *rule = it->rule;
@@ -1846,7 +2088,7 @@ bool eval_select(
     ecs_rule_reg_t *regs = get_registers(it, op_index);
 
     /* Get register indices for output */
-    uint8_t r = op->r_out;
+    int32_t r = op->r_out;
     ecs_assert(r != UINT8_MAX, ECS_INTERNAL_ERROR, NULL);
 
     /* Get queried for id, fill out potential variables */
@@ -1900,15 +2142,14 @@ bool eval_select(
         column = columns[op->column] = table_record.column;
 
         /* Store table in register */
-        regs[r].is.table = table;
+        table_reg_set(rule, regs, r, table);
     
     /* If this is a redo, progress to the next match */
     } else {
         /* First test if there are any more matches for the current table, in 
          * case we're looking for a wildcard. */
         if (filter.wildcard) {
-            table = regs[r].is.table;
-
+            table = table_reg_get(rule, regs, r);
             ecs_assert(table != NULL, ECS_INTERNAL_ERROR, NULL);
 
             column = columns[op->column];
@@ -1925,7 +2166,7 @@ bool eval_select(
             }
 
             /* Assign new table to table register */
-            table = regs[r].is.table = table_record.table;
+            table_reg_set(rule, regs, r, (table = table_record.table));
 
             /* Assign first matching column */
             column = columns[op->column] = table_record.column;
@@ -1952,7 +2193,7 @@ static
 bool eval_with(
     ecs_rule_iter_t *it,
     ecs_rule_op_t *op,
-    int16_t op_index,
+    int32_t op_index,
     bool redo)
 {
     const ecs_rule_t *rule = it->rule;
@@ -1962,7 +2203,7 @@ bool eval_with(
     ecs_rule_reg_t *regs = get_registers(it, op_index);
 
     /* Get register indices for input */
-    uint8_t r = op->r_in;
+    int32_t r = op->r_in;
 
     /* Get queried for id, fill out potential variables */
     ecs_rule_pair_t pair = op->param;
@@ -2006,7 +2247,7 @@ bool eval_with(
 
     /* If this is not a redo, start at the beginning */
     if (!redo) {
-        table = table_from_reg(rule, op, regs, r);
+        table = reg_get_table(rule, op, regs, r);
         if (!table) {
             return false;
         }
@@ -2035,7 +2276,7 @@ bool eval_with(
     
     /* If this is a redo, progress to the next match */
     } else {
-        table = table_from_reg(rule, op, regs, r);
+        table = reg_get_table(rule, op, regs, r);
         
         /* First test if there are any more matches for the current table, in 
          * case we're looking for a wildcard. */
@@ -2160,13 +2401,13 @@ static
 bool eval_each(
     ecs_rule_iter_t *it,
     ecs_rule_op_t *op,
-    int16_t op_index,
+    int32_t op_index,
     bool redo)
 {
     ecs_rule_each_ctx_t *op_ctx = &it->op_ctx[op_index].is.each;
     ecs_rule_reg_t *regs = get_registers(it, op_index);
-    uint8_t r_in = op->r_in;
-    uint8_t r_out = op->r_out;
+    int32_t r_in = op->r_in;
+    int32_t r_out = op->r_out;
     int32_t row;
 
     /* Make sure in/out registers are of the correct kind */
@@ -2177,14 +2418,20 @@ bool eval_each(
 
     /* Get table, make sure that it contains data. The select operation should
      * ensure that empty tables are never forwarded. */
-    ecs_table_t *table = regs[r_in].is.table;
+    ecs_table_t *table = table_reg_get(it->rule, regs, r_in);
     ecs_assert(table != NULL, ECS_INTERNAL_ERROR, NULL);
 
     ecs_data_t *data = ecs_table_get_data(table);
     ecs_assert(data != NULL, ECS_INTERNAL_ERROR, NULL);
-
-    int32_t count = ecs_table_data_count(data);
-    ecs_assert(count != 0, ECS_INTERNAL_ERROR, NULL);
+    
+    int32_t count = regs[r_in].is.table.count;
+    int32_t offset = regs[r_in].is.table.offset;
+    if (!count) {
+        count = ecs_table_data_count(data);
+        ecs_assert(count != 0, ECS_INTERNAL_ERROR, NULL);
+    } else {
+        count += offset;
+    }
 
     ecs_entity_t *entities = ecs_vector_first(data->entities, ecs_entity_t);
     ecs_assert(entities != NULL, ECS_INTERNAL_ERROR, NULL);
@@ -2192,7 +2439,7 @@ bool eval_each(
     /* If this is is not a redo, start from row 0, otherwise go to the
      * next entity. */
     if (!redo) {
-        row = op_ctx->row = 0;
+        row = op_ctx->row = offset;
     } else {
         row = ++ op_ctx->row;
     }
@@ -2213,9 +2460,76 @@ bool eval_each(
     }
 
     /* Assign entity */
-    regs[r_out].is.entity = e;
+    entity_reg_set(it->rule, regs, r_out, e);
 
     return true;
+}
+
+/* Store operation. Stores entity in register. This can either be an entity 
+ * literal or an entity variable that will be stored in a table register. The
+ * latter facilitates scenarios where an iterator only need to return a single
+ * entity but where the Yield returns tables. */
+static
+bool eval_store(
+    ecs_rule_iter_t *it,
+    ecs_rule_op_t *op,
+    int32_t op_index,
+    bool redo)
+{
+    if (redo) {
+        /* Only ever return result once */
+        return false;
+    }
+
+    const ecs_rule_t *rule = it->rule;
+    ecs_rule_reg_t *regs = get_registers(it, op_index);
+    int32_t r_in = op->r_in;
+    int32_t r_out = op->r_out;
+
+    ecs_entity_t e = reg_get_entity(rule, op, regs, r_in);
+    reg_set_entity(rule, regs, r_out, e);
+
+    /* Set column to 0, as we're not yielding a specific column of the entity */
+    set_column(it, op, NULL, 0);
+
+    return true;
+}
+
+/* A setjmp operation sets the jump label for a subsequent jump label. When the
+ * operation is first evaluated (redo=false) it sets the label to the on_pass
+ * label, and returns true. When the operation is evaluated again (redo=true)
+ * the label is set to on_fail and the operation returns false. */
+static
+bool eval_setjmp(
+    ecs_rule_iter_t *it,
+    ecs_rule_op_t *op,
+    int32_t op_index,
+    bool redo)
+{
+    ecs_rule_setjmp_ctx_t *ctx = &it->op_ctx[op_index].is.setjmp;
+
+    if (!redo) {
+        ctx->label = op->on_pass;
+        return true;
+    } else {
+        ctx->label = op->on_fail;
+        return false;
+    }
+}
+
+/* The jump operation jumps to an operation label. The operation always returns
+ * true. Since the operation modifies the control flow of the program directly, 
+ * the dispatcher does not look at the on_pass or on_fail labels of the jump
+ * instruction. Instead, the on_pass label is used to store the label of the
+ * operation that contains the label to jump to. */
+static
+bool eval_jump(
+    ecs_rule_iter_t *it,
+    ecs_rule_op_t *op,
+    int32_t op_index,
+    bool redo)
+{
+    return !redo;
 }
 
 /* Yield operation. This is the simplest operation, as all it does is return
@@ -2226,7 +2540,7 @@ static
 bool eval_yield(
     ecs_rule_iter_t *it,
     ecs_rule_op_t *op,
-    int16_t op_index,
+    int32_t op_index,
     bool redo)
 {
     /* Yield always returns false, because there are never any operations after
@@ -2239,22 +2553,28 @@ static
 bool eval_op(
     ecs_rule_iter_t *it, 
     ecs_rule_op_t *op,
-    int16_t op_index,
+    int32_t op_index,
     bool redo)
 {
     switch(op->kind) {
     case EcsRuleInput:
         return eval_input(it, op, op_index, redo);
-    case EcsRuleDfs:
-        return eval_dfs(it, op, op_index, redo);
     case EcsRuleSelect:
         return eval_select(it, op, op_index, redo);
     case EcsRuleWith:
-        return eval_with(it, op, op_index, redo);                
+        return eval_with(it, op, op_index, redo);
+    case EcsRuleSubSet:
+        return eval_subset(it, op, op_index, redo);                      
     case EcsRuleEach:
         return eval_each(it, op, op_index, redo);
+    case EcsRuleStore:
+        return eval_store(it, op, op_index, redo);
+    case EcsRuleSetJmp:
+        return eval_setjmp(it, op, op_index, redo);
+    case EcsRuleJump:
+        return eval_jump(it, op, op_index, redo);
     case EcsRuleYield:
-        return eval_yield(it, op, op_index, redo);            
+        return eval_yield(it, op, op_index, redo);
     default:
         return false;
     }
@@ -2300,11 +2620,13 @@ void push_columns(
     memcpy(dst_cols, src_cols, ECS_SIZEOF(int32_t) * it->rule->column_count);
 }
 
+/* Set iterator data from table */
 static
 void set_iter_table(
     ecs_iter_t *iter,
     ecs_table_t *table,
-    int32_t cur)
+    int32_t cur,
+    int32_t offset)
 {
     ecs_rule_iter_t *it = &iter->iter.rule;
 
@@ -2318,8 +2640,9 @@ void set_iter_table(
     ecs_assert(iter->count != 0, ECS_INTERNAL_ERROR, NULL);
 
     /* Set the entities array */
-    iter->entities = ecs_vector_first(data->entities, ecs_entity_t);
-    ecs_assert(iter->entities != NULL, ECS_INTERNAL_ERROR, NULL);
+    ecs_entity_t *entities = ecs_vector_first(data->entities, ecs_entity_t);
+    ecs_assert(entities != NULL, ECS_INTERNAL_ERROR, NULL);
+    iter->entities = &entities[offset];
 
     /* Set table parameters */
     it->table.columns = get_columns(it, cur);
@@ -2338,6 +2661,76 @@ void set_iter_table(
     }    
 }
 
+/* Populate iterator with data before yielding to application */
+static
+void populate_iterator(
+    const ecs_rule_t *rule,
+    ecs_iter_t *iter,
+    ecs_rule_iter_t *it,
+    ecs_rule_op_t *op,
+    int32_t op_index)
+{
+    int32_t r = op->r_in;
+
+    iter->table = &it->table;
+
+    /* If the input register for the yield does not point to a variable,
+     * the rule doesn't contain a this (.) variable. In that case, the
+     * iterator doesn't contain any data, and this function will simply
+     * return true or false. An application will still be able to obtain
+     * the variables that were resolved. */
+    if (r == UINT8_MAX) {
+        iter->count = 0;
+    } else {
+        ecs_rule_var_t *var = &rule->variables[r];
+        ecs_rule_reg_t *regs = get_registers(it, op_index);
+        ecs_rule_reg_t *reg = &regs[r];
+
+        if (var->kind == EcsRuleVarKindTable) {
+            ecs_table_t *table = table_reg_get(rule, regs, r);
+            int32_t count = regs[r].is.table.count;
+            int32_t offset = regs[r].is.table.offset;
+
+            set_iter_table(iter, table, op_index, offset);
+
+            if (count) {
+                iter->offset = offset;
+                iter->count = count;
+            }
+        } else {
+            /* If a single entity is returned, simply return the
+             * iterator with count 1 and a pointer to the entity id */
+            ecs_assert(var->kind == EcsRuleVarKindEntity, 
+                ECS_INTERNAL_ERROR, NULL);
+            ecs_entity_t e = reg->is.entity;
+            ecs_record_t *record = ecs_eis_get(rule->world, e);
+
+            /* If an entity is not stored in a table, it could not have
+             * been matched by anything */
+            ecs_assert(record != NULL, ECS_INTERNAL_ERROR, NULL);
+            set_iter_table(iter, record->table, op_index, 0);
+            iter->count = 1;
+
+            bool is_monitored;
+            iter->offset = ecs_record_to_row(
+                record->row, &is_monitored);
+        }
+    }   
+}
+
+static
+bool is_control_flow(
+    ecs_rule_op_t *op)
+{
+    switch(op->kind) {
+    case EcsRuleSetJmp:
+    case EcsRuleJump:
+        return true;
+    default:
+        return false;
+    }
+}
+
 /* Iterator next function. This evaluates the program until it reaches a Yield
  * operation, and returns the intermediate result(s) to the application. An
  * iterator can, depending on the program, either return a table, entity, or
@@ -2348,18 +2741,16 @@ bool ecs_rule_next(
     ecs_rule_iter_t *it = &iter->iter.rule;
     const ecs_rule_t *rule = it->rule;
     bool redo = it->redo;
+    int32_t last_index = 0;
 
     do {
-        int16_t cur = it->op;
-        ecs_rule_op_t *op = &rule->operations[cur];
-
         /* Evaluate an operation. The result of an operation determines the
          * flow of the program. If an operation returns true, the program 
-         * continues to the operation pointed to by 'on_ok'. If the operation
+         * continues to the operation pointed to by 'on_pass'. If the operation
          * returns false, the program continues to the operation pointed to by
          * 'on_fail'.
          *
-         * In most scenarios, on_ok points to the next operation, and on_fail
+         * In most scenarios, on_pass points to the next operation, and on_fail
          * points to the previous operation.
          *
          * When an operation fails, the previous operation will be invoked with
@@ -2368,73 +2759,43 @@ bool ecs_rule_next(
          * will be invoked with redo=false. This causes the operation to start
          * from the beginning, which is necessary since it just received a new
          * input. */
-        bool result = eval_op(it, op, cur, redo);
+        int32_t op_index = it->op;
+        ecs_rule_op_t *op = &rule->operations[op_index];
 
-        /* Operation matched */
-        if (result) {
-            int16_t next = it->op = op->on_ok;
-
-            /* Can never reach end of the sequence as result of a match */
-            ecs_assert(next != -1, ECS_INTERNAL_ERROR, NULL);
-
-            /* Push registers for next op */
-            push_registers(it, cur, next);
-            push_columns(it, cur, next);
-
-            redo = false;
-
-        /* Operation didn't match */
-        } else {
-            it->op = op->on_fail;
-            redo = true;
+        /* If this is not the first operation and is also not a control flow
+         * operation, push a new frame on the stack for the next operation */
+        if (!redo && op_index && !is_control_flow(op)) {
+            push_registers(it, last_index, op_index);
+            push_columns(it, last_index, op_index);
         }
+
+        /* Dispatch the operation */
+        bool result = eval_op(it, op, op_index, redo);
+        it->op = result ? op->on_pass : op->on_fail;
+        redo = !result;
 
         /* If the current operation is yield, return results */
         if (op->kind == EcsRuleYield) {
-            uint8_t r = op->r_in;
-
-            iter->table = &it->table;
-
-            /* If the input register for the yield does not point to a variable,
-             * the rule doesn't contain a this (.) variable. In that case, the
-             * iterator doesn't contain any data, and this function will simply
-             * return true or false. An application will still be able to obtain
-             * the variables that were resolved. */
-            if (r == UINT8_MAX) {
-                iter->count = 0;
-            } else {
-                ecs_rule_var_t *var = &rule->variables[r];
-                ecs_rule_reg_t *regs = get_registers(it, cur);
-                ecs_rule_reg_t *reg = &regs[r];
-
-                if (var->kind == EcsRuleVarKindTable) {
-                    ecs_table_t *table = reg->is.table;
-                    set_iter_table(iter, table, cur);
-                } else {
-                    /* If a single entity is returned, simply return the
-                     * iterator with count 1 and a pointer to the entity id */
-                    ecs_assert(var->kind == EcsRuleVarKindEntity, 
-                        ECS_INTERNAL_ERROR, NULL);
-                    ecs_entity_t e = reg->is.entity;
-                    ecs_record_t *record = ecs_eis_get(rule->world, e);
-
-                    /* If an entity is not stored in a table, it could not have
-                     * been matched by anything */
-                    ecs_assert(record != NULL, ECS_INTERNAL_ERROR, NULL);
-                    set_iter_table(iter, record->table, cur);
-                    iter->count = 1;
-
-                    bool is_monitored;
-                    iter->offset = ecs_record_to_row(
-                        record->row, &is_monitored);
-                }
-            }
-
-            it->redo = redo;
-
+            populate_iterator(rule, iter, it, op, op_index);
+            it->redo = true;
             return true;
         }
-    } while ((it->op != -1));
+
+        /* If the current operation is a jump, goto stored label */
+        if (op->kind == EcsRuleJump) {
+            /* Label is stored in setjmp context */
+            it->op = it->op_ctx[op->on_pass].is.setjmp.label;
+
+        /* The SetJmp sets the jump label and represents the first time that a
+         * a branch is evaluated, so always set redo to false */
+        } else if (op->kind == EcsRuleSetJmp) {
+            redo = false;
+
+        /* Store the index of the last non-control flow operation */
+        } else {
+            last_index = op_index;
+        }
+    } while (it->op != -1);
 
     ecs_rule_iter_free(iter);
 

@@ -387,26 +387,26 @@ void Rules_find_2_pairs() {
 }
 
 #define test_column_entity(it, column_id, str) {\
-    ecs_entity_t e = ecs_column_entity(it, column_id);\
-    test_assert(e != 0);\
+    ecs_entity_t _column_entity_e = ecs_column_entity(it, column_id);\
+    test_assert(_column_entity_e != 0);\
     char _column_entity[512];\
-    ecs_entity_str((it)->world, e, _column_entity, sizeof(_column_entity));\
+    ecs_entity_str((it)->world, _column_entity_e, _column_entity, sizeof(_column_entity));\
     test_str(_column_entity, str);\
 }
 
 #define test_column_source(it, column_id, str) {\
-    ecs_entity_t e = ecs_column_source(it, column_id);\
-    test_assert(e != 0);\
+    ecs_entity_t _column_source_e = ecs_column_source(it, column_id);\
+    test_assert(_column_source_e != 0);\
     char _column_source[512];\
-    ecs_entity_str((it)->world, e, _column_source, sizeof(_column_source));\
+    ecs_entity_str((it)->world, _column_source_e, _column_source, sizeof(_column_source));\
     test_str(_column_source, str);\
 }
 
 #define test_var(it, var_id, str) {\
-    ecs_entity_t e = ecs_rule_variable(it, var_id);\
-    test_assert(e != 0);\
+    ecs_entity_t _var_e = ecs_rule_variable(it, var_id);\
+    test_assert(_var_e != 0);\
     char _var[512];\
-    ecs_entity_str((it)->world, e, _var, sizeof(_var));\
+    ecs_entity_str((it)->world, _var_e, _var, sizeof(_var));\
     test_str(_var, str);\
 }
 
@@ -942,6 +942,11 @@ void Rules_find_transitive() {
     ecs_iter_t it = ecs_rule_iter(r);
 
     test_assert(ecs_rule_next(&it));
+    test_int(ecs_column_entity(&it, 1), 0);
+    test_int(it.count, 1);
+    test_str(ecs_get_name(world, it.entities[0]), "Character");
+
+    test_assert(ecs_rule_next(&it));
     test_column_entity(&it, 1, "(IsA,Character)");
     test_int(it.count, 3);
     test_str(ecs_get_name(world, it.entities[0]), "Human");
@@ -970,6 +975,11 @@ void Rules_find_transitive_2_branches() {
     test_assert(r != NULL);
 
     ecs_iter_t it = ecs_rule_iter(r);
+
+    test_assert(ecs_rule_next(&it));
+    test_int(ecs_column_entity(&it, 1), 0);
+    test_int(it.count, 1);
+    test_str(ecs_get_name(world, it.entities[0]), "Thing");
 
     test_assert(ecs_rule_next(&it));
     test_column_entity(&it, 1, "(IsA,Thing)");
@@ -1061,6 +1071,11 @@ void Rules_find_transitive_subtree() {
     test_assert(r != NULL);
 
     ecs_iter_t it = ecs_rule_iter(r);
+
+    test_assert(ecs_rule_next(&it));
+    test_int(ecs_column_entity(&it, 1), 0);
+    test_int(it.count, 1);
+    test_str(ecs_get_name(world, it.entities[0]), "SpaceShip");
 
     test_assert(ecs_rule_next(&it));
     test_column_entity(&it, 1, "(IsA,SpaceShip)");

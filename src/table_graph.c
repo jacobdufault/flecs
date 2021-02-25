@@ -253,7 +253,7 @@ void init_edges(
         }
 
         /* Register table with table index */
-        register_table(world, table, e, i);  
+        register_table(world, table, e, i);
 
         /* If e is trait, register table for both type and subject */
         if (ECS_HAS_ROLE(e, TRAIT)) {
