@@ -13878,6 +13878,12 @@ int scan_variables(
     for (i = 0; i < count; i ++) {
         ecs_sig_column_t *column = &columns[i];
 
+        /* Validate if predicate does not have too many arguments */
+        if (column->argc > 2) {
+            rule_error(rule, "too many arguments for term %d", i);
+            goto error;
+        }
+
         /* Evaluate the subject. The predicate and object are not evaluated, 
          * since they never can be elected as root. */
         if (!column->argv[0].entity || column->argv[0].entity == EcsThis) {
@@ -14509,6 +14515,18 @@ void insert_term_2(
                 if (obj) {
                     obj = &rule->variables[obj_id];
                 }
+
+                /* TODO: this instruction currently does not return inclusive
+                 * results. For example, it will return IsA(XWing, Machine) and
+                 * IsA(XWing, Thing), but not IsA(XWing, XWing). To enable
+                 * inclusive behavior, we need to be able to find all subjects
+                 * that have IsA relationships, without expanding to all
+                 * IsA relationships. For this a new mode needs to be supported
+                 * where an operation never does a redo.
+                 *
+                 * This select can then be used to find all subjects, and those
+                 * same subjects can then be used to find all (inclusive) 
+                 * supersets for those subjects. */
 
                 /* Insert instruction to find all subjects and objects */
                 ecs_rule_op_t *op = insert_operation(rule, -1, written);

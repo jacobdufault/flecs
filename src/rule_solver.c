@@ -1046,6 +1046,12 @@ int scan_variables(
     for (i = 0; i < count; i ++) {
         ecs_sig_column_t *column = &columns[i];
 
+        /* Validate if predicate does not have too many arguments */
+        if (column->argc > 2) {
+            rule_error(rule, "too many arguments for term %d", i);
+            goto error;
+        }
+
         /* Evaluate the subject. The predicate and object are not evaluated, 
          * since they never can be elected as root. */
         if (!column->argv[0].entity || column->argv[0].entity == EcsThis) {
