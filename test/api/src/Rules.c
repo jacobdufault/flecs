@@ -128,7 +128,6 @@ void Rules_2_comp_explicit_subject() {
 }
 
 const char *rules =
-"Final(Likes)\n"
 "IsA(CelestialBody, Thing)\n"
 "IsA(Planet, CelestialBody)\n"
 "IsA(Moon, CelestialBody)\n"
@@ -190,6 +189,8 @@ const char *rules =
 "Enemy(Rey, Palpatine)\n"
 "Likes(Leia, HanSolo)\n"
 "Likes(HanSolo, Leia)\n"
+"Likes(Fin, Rey)\n"
+"Likes(Rey, Ben)\n"
 ;
 
 void Rules_1_fact_true() {
@@ -463,24 +464,6 @@ void Rules_find_w_pred_var() {
 
     test_assert(ecs_rule_next(&it));
     test_int(it.count, 1);
-    test_str(ecs_get_name(world, it.entities[0]), "Rey");
-    test_column_entity(&it, 1, "Name");
-    test_var(&it, x_var, "Name");
-
-    test_assert(ecs_rule_next(&it));
-    test_int(it.count, 1);
-    test_str(ecs_get_name(world, it.entities[0]), "Rey");
-    test_column_entity(&it, 1, "Human");  
-    test_var(&it, x_var, "Human");
-
-    test_assert(ecs_rule_next(&it));
-    test_int(it.count, 1);
-    test_str(ecs_get_name(world, it.entities[0]), "Rey");
-    test_column_entity(&it, 1, "Jedi");
-    test_var(&it, x_var, "Jedi");
-
-    test_assert(ecs_rule_next(&it));
-    test_int(it.count, 1);
     test_str(ecs_get_name(world, it.entities[0]), "Leia");
     test_column_entity(&it, 1, "Name");
     test_var(&it, x_var, "Name");
@@ -494,6 +477,24 @@ void Rules_find_w_pred_var() {
     test_assert(ecs_rule_next(&it));
     test_int(it.count, 1);
     test_str(ecs_get_name(world, it.entities[0]), "Leia");
+    test_column_entity(&it, 1, "Jedi");
+    test_var(&it, x_var, "Jedi");
+
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 1);
+    test_str(ecs_get_name(world, it.entities[0]), "Rey");
+    test_column_entity(&it, 1, "Name");
+    test_var(&it, x_var, "Name");
+
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 1);
+    test_str(ecs_get_name(world, it.entities[0]), "Rey");
+    test_column_entity(&it, 1, "Human");  
+    test_var(&it, x_var, "Human");
+
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 1);
+    test_str(ecs_get_name(world, it.entities[0]), "Rey");
     test_column_entity(&it, 1, "Jedi");
     test_var(&it, x_var, "Jedi");
 
@@ -1364,13 +1365,6 @@ void Rules_transitive_instances() {
     test_var(&it, x_var, "Human");    
 
     test_assert(ecs_rule_next(&it));
-    test_int(it.count, 1);    
-    test_str(ecs_get_name(world, it.entities[0]), "Rey");
-    test_column_entity(&it, 1, "Human");
-    test_column_entity(&it, 2, "(IsA,Character)");
-    test_var(&it, x_var, "Human");
-
-    test_assert(ecs_rule_next(&it));
     test_int(it.count, 1);
     test_str(ecs_get_name(world, it.entities[0]), "Leia");
     test_column_entity(&it, 1, "Human");
@@ -1380,6 +1374,13 @@ void Rules_transitive_instances() {
     test_assert(ecs_rule_next(&it));
     test_int(it.count, 1);
     test_str(ecs_get_name(world, it.entities[0]), "HanSolo");
+    test_column_entity(&it, 1, "Human");
+    test_column_entity(&it, 2, "(IsA,Character)");
+    test_var(&it, x_var, "Human");
+
+    test_assert(ecs_rule_next(&it));
+    test_int(it.count, 1);    
+    test_str(ecs_get_name(world, it.entities[0]), "Rey");
     test_column_entity(&it, 1, "Human");
     test_column_entity(&it, 2, "(IsA,Character)");
     test_var(&it, x_var, "Human");
@@ -1773,8 +1774,6 @@ void Rules_transitive_all() {
 
     int32_t y_var = ecs_rule_find_variable(r, "Y");
     test_assert(y_var != -1);
-
-    printf("%s\n", ecs_rule_str(r));
 
     /* All permutations of all valid IsA relationships */
 

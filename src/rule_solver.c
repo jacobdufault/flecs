@@ -1148,7 +1148,6 @@ static
 ecs_rule_var_t* get_most_specific_var(
     ecs_rule_t *rule,
     ecs_rule_var_t *var,
-    int32_t column,
     bool *written)
 {
     if (!var) {
@@ -1214,7 +1213,7 @@ ecs_rule_var_t* ensure_entity_written(
     }
 
     /* Ensure we're working with the most specific version of subj we can get */
-    ecs_rule_var_t *evar = get_most_specific_var(rule, var, column, written);
+    ecs_rule_var_t *evar = get_most_specific_var(rule, var, written);
 
     /* The post condition of this function is that there is an entity variable,
      * and that it is written. Make sure that the result is an entity */
@@ -1254,13 +1253,13 @@ ecs_rule_op_t* insert_operation(
          * corresponding table variable has already been resolved. */
         if (pair.reg_mask & RULE_PAIR_PREDICATE) {
             ecs_rule_var_t *pred = &rule->variables[pair.pred];
-            pred = get_most_specific_var(rule, pred, column_index, written);
+            pred = get_most_specific_var(rule, pred, written);
             pair.pred = pred->id;
         }
 
         if (pair.reg_mask & RULE_PAIR_OBJECT) {
             ecs_rule_var_t *obj = &rule->variables[pair.obj];
-            obj = get_most_specific_var(rule, obj, column_index, written);
+            obj = get_most_specific_var(rule, obj, written);
             pair.obj = obj->id;
         }
     } else {
@@ -1594,6 +1593,12 @@ void insert_nonfinal_select_or_with(
         subj = &rule->variables[subj_id];
     }
 
+    /*  Make sure to use the most specific version of the object */
+    if (param.reg_mask & RULE_PAIR_OBJECT) {
+        ecs_rule_var_t *obj = &rule->variables[param.obj];
+        obj = get_most_specific_var(rule, obj, written);
+    }    
+
     ecs_rule_op_t *op = insert_operation(rule, -1, written);
 
     /* Use subset variable for predicate */
@@ -1631,7 +1636,7 @@ void insert_term_2(
     }
 
     /* Ensure we're working with the most specific version of subj we can get */
-    subj = get_most_specific_var(rule, subj, c, written);
+    subj = get_most_specific_var(rule, subj, written);
 
     if (pred || (param.final && !param.transitive)) {
         ecs_rule_op_t *op = insert_operation(rule, c, written);
@@ -1651,7 +1656,7 @@ void insert_term_2(
 
                     /* Try to resolve subj as entity again */
                     if (subj->kind == EcsRuleVarKindTable) {
-                        subj = get_most_specific_var(rule, subj, c, written);
+                        subj = get_most_specific_var(rule, subj, written);
                     }
                 }
 
@@ -1731,7 +1736,7 @@ void insert_term_1(
     ecs_rule_pair_t param = column_to_pair(rule, column);
 
     /* Ensure we're working with the most specific version of subj we can get */
-    subj = get_most_specific_var(rule, subj, c, written);
+    subj = get_most_specific_var(rule, subj, written);
 
     if (pred || param.final) {
         ecs_rule_op_t *op = insert_operation(rule, c, written);
