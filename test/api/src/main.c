@@ -37,8 +37,16 @@ void Rules_join_by_predicate(void);
 void Rules_join_by_predicate_from_subject(void);
 void Rules_find_transitive(void);
 void Rules_find_transitive_2_branches(void);
-void Rules_find_transitive_subtree(void);
-void Rules_find_transitive_instances(void);
+void Rules_transitive_subsets(void);
+void Rules_transitive_subsets_2_terms(void);
+void Rules_transitive_supersets(void);
+void Rules_transitive_superset_w_subj_var(void);
+void Rules_transitive_superset_w_subj_var_2_term(void);
+void Rules_transitive_supersets_2_terms(void);
+void Rules_transitive_instances(void);
+void Rules_transitive_instances_2_terms(void);
+void Rules_transitive_implicit_isa_instances(void);
+void Rules_transitive_implicit_isa_instances_2_terms(void);
 void Rules_transitive_fact_false(void);
 void Rules_transitive_fact_true_depth_1(void);
 void Rules_transitive_fact_true_depth_2(void);
@@ -46,9 +54,11 @@ void Rules_transitive_fact_true_depth_3(void);
 void Rules_transitive_fact_true_depth_4(void);
 void Rules_transitive_fact_true_depth_5(void);
 void Rules_transitive_fact_true_2_relationships(void);
+void Rules_transitive_fact_same_subj_obj(void);
+void Rules_transitive_fact_subset_superset(void);
+void Rules_transitive_all(void);
 void Rules_same_pred_obj(void);
 void Rules_same_pred_obj_explicit_subject(void);
-void Rules_transitive_predicate_instances(void);
 
 // Testsuite 'New'
 void New_setup(void);
@@ -1651,12 +1661,44 @@ bake_test_case Rules_testcases[] = {
         Rules_find_transitive_2_branches
     },
     {
-        "find_transitive_subtree",
-        Rules_find_transitive_subtree
+        "transitive_subsets",
+        Rules_transitive_subsets
     },
     {
-        "find_transitive_instances",
-        Rules_find_transitive_instances
+        "transitive_subsets_2_terms",
+        Rules_transitive_subsets_2_terms
+    },
+    {
+        "transitive_supersets",
+        Rules_transitive_supersets
+    },
+    {
+        "transitive_superset_w_subj_var",
+        Rules_transitive_superset_w_subj_var
+    },
+    {
+        "transitive_superset_w_subj_var_2_term",
+        Rules_transitive_superset_w_subj_var_2_term
+    },
+    {
+        "transitive_supersets_2_terms",
+        Rules_transitive_supersets_2_terms
+    },
+    {
+        "transitive_instances",
+        Rules_transitive_instances
+    },
+    {
+        "transitive_instances_2_terms",
+        Rules_transitive_instances_2_terms
+    },
+    {
+        "transitive_implicit_isa_instances",
+        Rules_transitive_implicit_isa_instances
+    },
+    {
+        "transitive_implicit_isa_instances_2_terms",
+        Rules_transitive_implicit_isa_instances_2_terms
     },
     {
         "transitive_fact_false",
@@ -1687,16 +1729,24 @@ bake_test_case Rules_testcases[] = {
         Rules_transitive_fact_true_2_relationships
     },
     {
+        "transitive_fact_same_subj_obj",
+        Rules_transitive_fact_same_subj_obj
+    },
+    {
+        "transitive_fact_subset_superset",
+        Rules_transitive_fact_subset_superset
+    },
+    {
+        "transitive_all",
+        Rules_transitive_all
+    },
+    {
         "same_pred_obj",
         Rules_same_pred_obj
     },
     {
         "same_pred_obj_explicit_subject",
         Rules_same_pred_obj_explicit_subject
-    },
-    {
-        "transitive_predicate_instances",
-        Rules_transitive_predicate_instances
     }
 };
 
@@ -7258,7 +7308,7 @@ static bake_test_suite suites[] = {
         "Rules",
         NULL,
         NULL,
-        40,
+        50,
         Rules_testcases
     },
     {

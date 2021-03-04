@@ -109,6 +109,7 @@ typedef struct ecs_rule_with_ctx_t {
                                  * wildcard. Used for transitive queries */
 } ecs_rule_with_ctx_t;
 
+/* Subset context */
 typedef struct ecs_rule_subset_frame_t {
     ecs_rule_with_ctx_t with_ctx;
     ecs_table_t *table;
@@ -116,12 +117,24 @@ typedef struct ecs_rule_subset_frame_t {
     int32_t column;
 } ecs_rule_subset_frame_t;
 
-/* Follow context */
 typedef struct ecs_rule_subset_ctx_t {
     ecs_rule_subset_frame_t storage[16]; /* Alloc-free array for small trees */
     ecs_rule_subset_frame_t *stack;
     int32_t sp;
 } ecs_rule_subset_ctx_t;
+
+/* Superset context */
+typedef struct ecs_rule_superset_frame_t {
+    ecs_table_t *table;
+    int32_t column;
+} ecs_rule_superset_frame_t;
+
+typedef struct ecs_rule_superset_ctx_t {
+    ecs_rule_superset_frame_t storage[16]; /* Alloc-free array for small trees */
+    ecs_rule_superset_frame_t *stack;
+    ecs_sparse_t *table_set;
+    int32_t sp;
+} ecs_rule_superset_ctx_t;
 
 /* Each context */
 typedef struct ecs_rule_each_ctx_t {
@@ -138,6 +151,7 @@ typedef struct ecs_rule_setjmp_ctx_t {
 typedef struct ecs_rule_op_ctx_t {
     union {
         ecs_rule_subset_ctx_t subset;
+        ecs_rule_superset_ctx_t superset;
         ecs_rule_with_ctx_t with;
         ecs_rule_each_ctx_t each;
         ecs_rule_setjmp_ctx_t setjmp;
@@ -673,60 +687,9 @@ ecs_rule_filter_t pair_to_filter(
     return result;
 }
 
-/* This function iterates a type with a provided pair expression, as is returned
- * by pair_to_entity. It starts looking in the type at an offset ('column') and
- * returns the first matching element. */
-static
-int32_t find_next_match(
-    ecs_type_t type, 
-    int32_t column,
-    ecs_rule_filter_t *filter)
-{
-    /* Scan the type for the next match */
-    int32_t i, count = ecs_vector_count(type);
-    ecs_entity_t *entities = ecs_vector_first(type, ecs_entity_t);
-
-    /* If the predicate is not a wildcard, the next element must match the 
-     * queried for entity, or the type won't contain any more matches. The
-     * reason for this is that ids in a type are sorted, and the predicate
-     * occupies the most significant bits in the type */
-    if (!filter->pred_wildcard) {
-        /* Evaluate at most one element if column is not 0. If column is 0,
-         * the entire type is evaluated. */
-        if (column && column < count) {
-            count = column + 1;
-        }
-    }
-
-    /* Find next column that equals look_for after masking out the wildcards */
-    ecs_entity_t expr_mask = filter->expr_mask;
-    ecs_entity_t expr_match = filter->expr_match;
-
-    for (i = column; i < count; i ++) {
-        if ((entities[i] & expr_mask) == expr_match) {
-            if (filter->same_var) {
-                ecs_entity_t lo_id = ecs_entity_t_lo(entities[i]);
-                ecs_entity_t hi_id = ecs_entity_t_hi(
-                    entities[i] & ECS_COMPONENT_MASK);
-
-                /* If pair contains the same variable twice but the matched id
-                 * has different values, this is not a match */
-                if (lo_id != hi_id) {
-                    continue;
-                }
-            }
-
-            return i;
-        }
-    }
-
-    /* No matching columns were found in remainder of type */
-    return -1;
-}
-
 /* This function is responsible for reifying the variables (filling them out 
  * with their actual values as soon as they are known). It uses the pair 
- * expression returned by pair_to_entity, and attempts to fill out each of the
+ * expression returned by pair_get_most_specific_var, and attempts to fill out each of the
  * wildcards in the pair. If a variable isn't reified yet, the pair expression
  * will still contain one or more wildcards, which is harmless as the respective
  * registers will also point to a wildcard. */
@@ -1152,49 +1115,50 @@ error:
     return -1;
 }
 
+/* Get entity variable from table variable */
 static
-ecs_rule_op_t* insert_operation(
+ecs_rule_var_t* to_entity(
     ecs_rule_t *rule,
-    int32_t column_index)
+    ecs_rule_var_t *var)
 {
-    ecs_rule_op_t *op = create_operation(rule);
-    op->on_pass = rule->operation_count;
-    op->on_fail = rule->operation_count - 2;
-
-    /* Parse the column's type into a pair. A pair extracts the ids from
-     * the column, and replaces variables with wildcards which can then
-     * be matched against actual relationships. A pair retains the 
-     * information about the variables, so that when a match happens,
-     * the pair can be used to reify the variable. */
-    if (column_index != -1) {
-        ecs_sig_column_t *column = ecs_vector_get(
-            rule->sig.columns, ecs_sig_column_t, column_index);
-        ecs_assert(column != NULL, ECS_INTERNAL_ERROR, NULL);    
-
-        ecs_rule_pair_t pair = column_to_pair(rule, column);
- 
-        op->param = pair;
-    } else {
-        /* Not all operations have a filter (like Each) */
+    if (!var) {
+        return NULL;
     }
 
-    /* Store corresponding signature column so we can correlate and
-     * store the table columns with signature columns. */
-    op->column = column_index;
+    ecs_rule_var_t *evar = NULL;
+    if (var->kind == EcsRuleVarKindTable) {
+        evar = find_variable(rule, EcsRuleVarKindEntity, var->name);
+    } else {
+        evar = var;
+    }
 
-    return op;
+    return evar;
 }
 
+/* Ensure that if a table variable has been written, the corresponding entity
+ * variable is populated. The function will return the most specific, populated
+ * variable. */
 static
-void write_variable(
+ecs_rule_var_t* get_most_specific_var(
     ecs_rule_t *rule,
     ecs_rule_var_t *var,
     int32_t column,
     bool *written)
 {
-    ecs_rule_var_t 
-    *tvar = find_variable(rule, EcsRuleVarKindTable, var->name),
-    *evar = find_variable(rule, EcsRuleVarKindEntity, var->name);
+    if (!var) {
+        return NULL;
+    }
+
+    ecs_rule_var_t *tvar, *evar = to_entity(rule, var);
+    if (!evar) {
+        return var;
+    }
+
+    if (var->kind == EcsRuleVarKindTable) {
+        tvar = var;
+    } else {
+        tvar = find_variable(rule, EcsRuleVarKindTable, var->name);
+    }
 
     /* If variable is used as predicate or object, it should have been 
      * registered as an entity. */
@@ -1207,18 +1171,106 @@ void write_variable(
         /* If the variable has been written as a table but not yet
          * as an entity, insert an each operation that yields each
          * entity in the table. */
-        if (evar && !written[evar->id]) {
-            ecs_rule_op_t *op = insert_operation(rule, column);
-            op->kind = EcsRuleEach;
-            op->has_in = true;
-            op->has_out = true;
-            op->r_in = tvar->id;
-            op->r_out = evar->id;
+        if (evar) {
+            if (!written[evar->id]) {
+                ecs_rule_op_t *op = create_operation(rule);
+                op->kind = EcsRuleEach;
+                op->on_pass = rule->operation_count;
+                op->on_fail = rule->operation_count - 2;
+                op->has_in = true;
+                op->has_out = true;
+                op->r_in = tvar->id;
+                op->r_out = evar->id;
+
+                /* Entity will either be written or has been written */
+                written[evar->id] = true;
+            }
+
+            return evar;
         }
+    } else if (evar && written[evar->id]) {
+        return evar;
     }
 
-    /* Entity will either be written or has been written */
-    written[evar->id] = true;
+    return var;
+}
+
+/* Ensure that an entity variable is written before using it */
+static
+ecs_rule_var_t* ensure_entity_written(
+    ecs_rule_t *rule,
+    ecs_rule_var_t *var,
+    int32_t column,
+    bool *written)
+{
+    if (!var) {
+        return NULL;
+    }
+
+    /* Ensure we're working with the most specific version of subj we can get */
+    ecs_rule_var_t *evar = get_most_specific_var(rule, var, column, written);
+
+    /* The post condition of this function is that there is an entity variable,
+     * and that it is written. Make sure that the result is an entity */
+    ecs_assert(evar != NULL, ECS_INTERNAL_ERROR, NULL);
+    ecs_assert(evar->kind == EcsRuleVarKindEntity, ECS_INTERNAL_ERROR, NULL);
+
+    /* Make sure the variable has been written */
+    ecs_assert(written[evar->id] == true, ECS_INTERNAL_ERROR, NULL);
+    
+    return evar;
+}
+
+static
+ecs_rule_op_t* insert_operation(
+    ecs_rule_t *rule,
+    int32_t column_index,
+    bool *written)
+{
+    ecs_rule_pair_t pair = {0};
+
+    /* Parse the column's type into a pair. A pair extracts the ids from
+     * the column, and replaces variables with wildcards which can then
+     * be matched against actual relationships. A pair retains the 
+     * information about the variables, so that when a match happens,
+     * the pair can be used to reify the variable. */
+    if (column_index != -1) {
+        ecs_sig_column_t *column = ecs_vector_get(
+            rule->sig.columns, ecs_sig_column_t, column_index);
+        ecs_assert(column != NULL, ECS_INTERNAL_ERROR, NULL);    
+
+        pair = column_to_pair(rule, column);
+
+        /* If the pair contains entity variables that have not yet been written,
+         * insert each instructions in case their tables are known. Variables in
+         * a pair that are truly unknown will be populated by the operation,
+         * but an operation should never overwrite an entity variable if the 
+         * corresponding table variable has already been resolved. */
+        if (pair.reg_mask & RULE_PAIR_PREDICATE) {
+            ecs_rule_var_t *pred = &rule->variables[pair.pred];
+            pred = get_most_specific_var(rule, pred, column_index, written);
+            pair.pred = pred->id;
+        }
+
+        if (pair.reg_mask & RULE_PAIR_OBJECT) {
+            ecs_rule_var_t *obj = &rule->variables[pair.obj];
+            obj = get_most_specific_var(rule, obj, column_index, written);
+            pair.obj = obj->id;
+        }
+    } else {
+        /* Not all operations have a filter (like Each) */
+    }
+
+    ecs_rule_op_t *op = create_operation(rule);
+    op->on_pass = rule->operation_count;
+    op->on_fail = rule->operation_count - 2;
+    op->param = pair;  
+
+    /* Store corresponding signature column so we can correlate and
+     * store the table columns with signature columns. */
+    op->column = column_index;
+
+    return op;
 }
 
 /* Insert first operation, which is always Input. This creates an entry in
@@ -1269,65 +1321,85 @@ void insert_yield(
     }
 }
 
-/* Return subset including the root */
+/* Return superset/subset including the root */
 static
-void insert_select_incl_subset(
+void insert_inclusive_set(
     ecs_rule_t *rule,
-    ecs_rule_op_t *op,
-    ecs_rule_var_t *var,
-    ecs_rule_pair_t pair,
-    int32_t c)
+    ecs_rule_op_kind_t op_kind,
+    ecs_rule_var_t *out,
+    ecs_rule_pair_t param,
+    ecs_rule_var_t *root,
+    ecs_entity_t root_entity,
+    int32_t c,
+    bool *written)
 {
-    int32_t setjmp_lbl = rule->operation_count - 1;
+    ecs_assert(out != NULL, ECS_INTERNAL_ERROR, NULL);
+
+    ecs_assert((op_kind != EcsRuleSuperSet) || 
+        out->kind == EcsRuleVarKindEntity, ECS_INTERNAL_ERROR, NULL);
+
+    int32_t setjmp_lbl = rule->operation_count;
     int32_t store_lbl = setjmp_lbl + 1;
-    int32_t subset_lbl = setjmp_lbl + 2;
+    int32_t set_lbl = setjmp_lbl + 2;
     int32_t next_op = setjmp_lbl + 4;
     int32_t prev_op = setjmp_lbl - 1;
 
-    /* Insert 3 operations at once, so we don't have to worry about how
+    /* Insert 4 operations at once, so we don't have to worry about how
      * the instruction array reallocs */
-    insert_operation(rule, -1);
-    insert_operation(rule, -1);
-    op = insert_operation(rule, -1);
+    insert_operation(rule, -1, written);
+    insert_operation(rule, -1, written);
+    insert_operation(rule, -1, written);
+    ecs_rule_op_t *op = insert_operation(rule, -1, written);
 
     ecs_rule_op_t *setjmp = op - 3;
     ecs_rule_op_t *store = op - 2;
-    ecs_rule_op_t *subset = op - 1;
+    ecs_rule_op_t *set = op - 1;
     ecs_rule_op_t *jump = op;
 
     /* The SetJmp operation stores a conditional jump label that either
-     * points to the Store or SubSet operation */
+     * points to the Store or *Set operation */
     setjmp->kind = EcsRuleSetJmp;
     setjmp->on_pass = store_lbl;
-    setjmp->on_fail = subset_lbl;
+    setjmp->on_fail = set_lbl;
 
     /* The Store operation yields the root of the subtree. After yielding,
      * this operation will fail and return to SetJmp, which will cause it
-     * to switch to the SubSet operation. */
+     * to switch to the *Set operation. */
     store->kind = EcsRuleStore;
+    store->param.pred = param.pred;
     store->on_pass = next_op;
     store->on_fail = setjmp_lbl;
     store->has_in = true;
     store->has_out = true;
-    store->r_out = var->id;
+    store->r_out = out->id;
     store->column = c;
 
     /* If the object of the filter is not a variable, store literal */
-    if (!(pair.reg_mask & RULE_PAIR_OBJECT)) {
+    if (!root) {
         store->r_in = UINT8_MAX;
-        store->subject = pair.obj;
+        store->subject = root_entity;
+        store->param.obj = root_entity;
     } else {
-        store->r_in = pair.obj;
+        store->r_in = root->id;
+        store->param.obj = root->id;
+        store->param.reg_mask = RULE_PAIR_OBJECT;
     }
 
-    /* The SubSet operation yields tables that are subsets of the root */
-    subset->kind = EcsRuleSubSet;
-    subset->param = pair;
-    subset->on_pass = next_op;
-    subset->on_fail = prev_op;
-    subset->has_out = true;
-    subset->r_out = var->id;
-    subset->column = c;
+    /* This is either a SubSet or SuperSet operation */
+    set->kind = op_kind;
+    set->param.pred = param.pred;
+    set->on_pass = next_op;
+    set->on_fail = prev_op;
+    set->has_out = true;
+    set->r_out = out->id;
+    set->column = c;
+
+    if (!root) {
+        set->param.obj = root_entity;
+    } else {
+        set->param.obj = root->id;
+        set->param.reg_mask = RULE_PAIR_OBJECT;
+    }
 
     /* The jump operation jumps to either the store or subset operation,
      * depending on whether the store operation already yielded. The 
@@ -1341,89 +1413,339 @@ void insert_select_incl_subset(
      * the label it needs to jump to from the setjmp op_ctx. */
     jump->on_pass = setjmp_lbl;
     jump->on_fail = -1;
+
+    written[out->id] = true;
 }
 
-/* Similar to insert_select_incl_subset, but instead of the relationship, return
- * the instances of the relationships. */
 static
-void insert_select_incl_subset_instances(
+ecs_rule_var_t* store_inclusive_set(
     ecs_rule_t *rule,
-    ecs_rule_op_t *op,
-    ecs_rule_var_t *var,
-    ecs_rule_pair_t pair,
+    ecs_rule_op_kind_t op_kind,
+    ecs_rule_pair_t param,
+    ecs_rule_var_t *root,
+    ecs_entity_t root_entity,
     int32_t c,
     bool *written)
 {
-    /* Store var id because we're going to potentially realloc the var array */
-    int32_t var_id = var->id;
+    /* The subset operation returns tables */
+    ecs_rule_var_kind_t var_kind = EcsRuleVarKindTable;
 
-    /* First, create anonymous variable for storing the relationship itself. 
-     * Also create entity variable, as we need to yield each entity in the
-     * returned table. */
-    ecs_rule_var_t *av = create_anonymous_variable(rule, EcsRuleVarKindTable);
-    ecs_rule_var_t *ave = create_variable(rule, EcsRuleVarKindEntity, av->name);
-    av = &rule->variables[ave->id - 1];
+    int32_t root_id;
+    if (root) {
+        root_id = root->id;
+    }
 
-    /* Insert operations that populate variable with the relationship tree. 
-     * For this we need to create a pair that contains the IsA relationship. */
-    ecs_rule_pair_t is_a_pair;
-    is_a_pair.pred = EcsIsA;
-    is_a_pair.obj = pair.pred;
-    is_a_pair.reg_mask = 0;
-    is_a_pair.transitive = false;
-    is_a_pair.final = true;
+    /* The superset operation returns entities */
+    if (op_kind == EcsRuleSuperSet) {
+        var_kind = EcsRuleVarKindEntity;   
+    }
+
+    /* Create anonymous variable for storing the set */
+    ecs_rule_var_t *av = create_anonymous_variable(rule, var_kind);
+    ecs_rule_var_t *ave = NULL;
+
+    /* If the variable kind is a table, also create an entity variable as the
+     * result of the set operation should be returned as an entity */
+    if (var_kind == EcsRuleVarKindTable) {
+        ave = create_variable(rule, EcsRuleVarKindEntity, av->name);
+        av = &rule->variables[ave->id - 1];
+    }
+
+    /* Since we added variables, refetch pointer to root, since it might have
+     * moved if the variables table was reallocd */
+    if (root) {
+        root = &rule->variables[root_id];
+    }
 
     /* Generate the operations */
-    insert_select_incl_subset(rule, op, av, is_a_pair, -1);
+    insert_inclusive_set(
+        rule, op_kind, av, param, root, root_entity, -1, written);
 
-    /* Make sure that Each is inserted for variable */
-    written[av->id] = true;
-    write_variable(rule, ave, c, written);
-
-    /* Now create a select operation that uses the relationship stored in the
-     * anonymous variable to find all instances */
-    ecs_rule_op_t *select = insert_operation(rule, -1);
-
-    /* Initialize filter for select, use variable as predicate */
-    select->param.pred = ave->id;
-    select->param.obj = pair.obj;
-    select->param.reg_mask = pair.reg_mask | RULE_PAIR_PREDICATE;
-
-    /* Set remaining values */
-    select->kind = EcsRuleSelect;
-    select->has_out = true;
-    select->r_out = var_id;
-    select->column = c;
+    /* Make sure to return entity variable, and that it is populated */
+    return ensure_entity_written(rule, av, c, written);
 }
 
-/* Insert select operation. A select returns all tables that match a pattern */
 static
-void insert_select(
+bool is_known(
+    ecs_rule_t *rule,
+    ecs_rule_var_t *var,
+    bool *written)
+{
+    if (!var) {
+        return true;
+    } else {
+        return written[var->id];
+    }
+}
+
+static
+void set_input_to_subj(
+    ecs_rule_op_t *op,
+    ecs_sig_column_t *column,
+    ecs_rule_var_t *var)
+{
+    op->has_in = true;
+    if (!var) {
+        op->r_in = UINT8_MAX;
+        op->subject = column->argv[0].entity;
+    } else {
+        op->r_in = var->id;
+    }
+}
+
+static
+void set_output_to_subj(
+    ecs_rule_op_t *op,
+    ecs_sig_column_t *column,
+    ecs_rule_var_t *var)
+{
+    op->has_out = true;
+    if (!var) {
+        op->r_out = UINT8_MAX;
+        op->subject = column->argv[0].entity;
+    } else {
+        op->r_out = var->id;
+    }
+}
+
+static
+void insert_select_or_with(
     ecs_rule_t *rule,
     ecs_rule_op_t *op,
-    ecs_rule_var_t *var,
+    ecs_sig_column_t *column,
+    ecs_rule_var_t *subj,
+    bool *written)
+{
+    ecs_rule_var_t *tvar = NULL, *evar = to_entity(rule, subj);
+    if (subj && subj->kind == EcsRuleVarKindTable) {
+        tvar = subj;
+    }
+
+    /* If entity variable is known and resolved, create with for it */
+    if (evar && is_known(rule, evar, written)) {
+        op->kind = EcsRuleWith;
+        op->r_in = evar->id;
+        set_input_to_subj(op, column, subj);
+
+    /* If table variable is known and resolved, create with for it */
+    } else if (tvar && is_known(rule, tvar, written)) {
+        op->kind = EcsRuleWith;
+        op->r_in = tvar->id;
+        set_input_to_subj(op, column, subj);
+
+    /* If subject is neither table nor entitiy, with operates on literal */        
+    } else if (!tvar && !evar) {
+        op->kind = EcsRuleWith;
+        set_input_to_subj(op, column, subj);
+
+    /* If subject is table or entity but not known, use select */
+    } else {
+        /* Subject must be NULL, since otherwise we would be writing to a
+         * variable that is already known */
+        ecs_assert(subj != NULL, ECS_INTERNAL_ERROR, NULL);
+        op->kind = EcsRuleSelect;
+        set_output_to_subj(op, column, subj);
+
+        written[subj->id] = true;
+    }
+
+    if (op->param.reg_mask & RULE_PAIR_PREDICATE) {
+        written[op->param.pred] = true;
+    }
+
+    if (op->param.reg_mask & RULE_PAIR_OBJECT) {
+        written[op->param.obj] = true;
+    }
+}
+
+static
+void insert_nonfinal_select_or_with(
+    ecs_rule_t *rule,
+    ecs_sig_column_t *column,
+    ecs_rule_pair_t param,
+    ecs_rule_var_t *subj,
+    int32_t c,
+    bool *written)    
+{
+    ecs_assert(!param.final, ECS_INTERNAL_ERROR, NULL);
+    
+    int32_t subj_id;
+    if (subj) {
+        subj_id = subj->id;
+    }
+
+    /* If predicate is not final, evaluate with all subsets of predicate.
+     * Create a param with only the predicate set. */
+    ecs_rule_pair_t pred_param;
+    pred_param.pred = EcsIsA;
+    pred_param.obj = param.pred;
+    pred_param.reg_mask = 0;
+    ecs_rule_var_t *pred_subsets = store_inclusive_set(
+        rule, EcsRuleSubSet, pred_param, NULL, param.pred, c, written);
+    
+    /* Refetch subject variable, as variable array may have reallocated */
+    if (subj) {
+        subj = &rule->variables[subj_id];
+    }
+
+    ecs_rule_op_t *op = insert_operation(rule, -1, written);
+
+    /* Use subset variable for predicate */
+    op->param.pred = pred_subsets->id;
+    op->param.obj = param.obj;
+    op->param.reg_mask = param.reg_mask | RULE_PAIR_PREDICATE;
+
+    /* Associate last operation with column to ensure that the resolved
+     * component id gets written. */
+    op->column = c;
+
+    insert_select_or_with(rule, op, column, subj, written);
+}
+
+static
+void insert_term_2(
+    ecs_rule_t *rule,
+    ecs_sig_column_t *column,
     int32_t c,
     bool *written)
 {
-    written[var->id] = true;
+    ecs_rule_var_t *pred = column_pred(rule, column);
+    ecs_rule_var_t *subj = column_subj(rule, column);
+    ecs_rule_var_t *obj = column_obj(rule, column);
+    ecs_rule_pair_t param = column_to_pair(rule, column);
 
-    /* If predicate is not Final, we need to search for IsA relationships. */    
-    if (!op->param.final) {
-        insert_select_incl_subset_instances(rule, op, var, op->param, c, written);
-    
-    /* If the param is transitive, we need to insert a SubSet operation which
-     * does a depth-first search to iterate the transitive relationship. By
-     * default, iterating a transitive relationship als includes the root of the
-     * tree, so that when iterating all subsets of Animal, Animal itself is also
-     * returned. This requires combining a Store with a SubSet */    
-    } else if (op->param.transitive) {
-        insert_select_incl_subset(rule, op, var, op->param, c);
+    int32_t subj_id;
+    if (subj) {
+        subj_id = subj->id;
+    }
 
-    /* If the param is final and not transitive a normal select will do */
+    int32_t obj_id;
+    if (obj){
+        obj_id = obj->id;
+    }
+
+    /* Ensure we're working with the most specific version of subj we can get */
+    subj = get_most_specific_var(rule, subj, c, written);
+
+    if (pred || (param.final && !param.transitive)) {
+        ecs_rule_op_t *op = insert_operation(rule, c, written);
+        insert_select_or_with(rule, op, column, subj, written);
+
+    } else if (!param.final) {
+        insert_nonfinal_select_or_with(rule, column, param, subj, c, written);
+    } else if (param.transitive) {
+        if (is_known(rule, subj, written)) {
+            if (is_known(rule, obj, written)) {
+                ecs_rule_var_t *obj_subsets = store_inclusive_set(
+                    rule, EcsRuleSubSet, param, obj, 
+                    column->argv[1].entity, c, written);
+
+                if (subj) {
+                    subj = &rule->variables[subj_id];
+
+                    /* Try to resolve subj as entity again */
+                    if (subj->kind == EcsRuleVarKindTable) {
+                        subj = get_most_specific_var(rule, subj, c, written);
+                    }
+                }
+
+                ecs_rule_op_t *op = insert_operation(rule, c, written);
+                op->kind = EcsRuleWith;
+                set_input_to_subj(op, column, subj);
+
+                /* Use subset variable for object */
+                op->param.obj = obj_subsets->id;
+                op->param.reg_mask = RULE_PAIR_OBJECT;
+            } else {
+                obj = to_entity(rule, obj);
+
+                insert_inclusive_set(
+                    rule, EcsRuleSuperSet, obj, param, subj, 
+                    column->argv[0].entity, c, written);
+            }
+        } else {
+            if (is_known(rule, obj, written)) {
+                insert_inclusive_set(
+                    rule, EcsRuleSubSet, subj, param, obj, 
+                    column->argv[1].entity, c, written);
+            } else {
+                ecs_rule_var_t *av = create_anonymous_variable(
+                    rule, EcsRuleVarKindEntity);
+
+                subj = &rule->variables[subj_id];
+
+                if (obj) {
+                    obj = &rule->variables[obj_id];
+                }
+
+                /* TODO: this instruction currently does not return inclusive
+                 * results. For example, it will return IsA(XWing, Machine) and
+                 * IsA(XWing, Thing), but not IsA(XWing, XWing). To enable
+                 * inclusive behavior, we need to be able to find all subjects
+                 * that have IsA relationships, without expanding to all
+                 * IsA relationships. For this a new mode needs to be supported
+                 * where an operation never does a redo.
+                 *
+                 * This select can then be used to find all subjects, and those
+                 * same subjects can then be used to find all (inclusive) 
+                 * supersets for those subjects. */
+
+                /* Insert instruction to find all subjects and objects */
+                ecs_rule_op_t *op = insert_operation(rule, -1, written);
+                op->kind = EcsRuleSelect;
+                set_output_to_subj(op, column, subj);
+
+                /* Set object to anonymous variable */
+                op->param.pred = param.pred;
+                op->param.obj = av->id;
+                op->param.reg_mask = param.reg_mask | RULE_PAIR_OBJECT;
+
+                written[subj->id] = true;
+                written[av->id] = true;
+
+                /* Insert superset instruction to find all supersets */
+                insert_inclusive_set(
+                    rule, EcsRuleSuperSet, obj, op->param, av,
+                    0, c, written);
+
+            }
+        }
+    }
+}
+
+static
+void insert_term_1(
+    ecs_rule_t *rule,
+    ecs_sig_column_t *column,
+    int32_t c,
+    bool *written)
+{
+    ecs_rule_var_t *pred = column_pred(rule, column);
+    ecs_rule_var_t *subj = column_subj(rule, column);
+    ecs_rule_pair_t param = column_to_pair(rule, column);
+
+    /* Ensure we're working with the most specific version of subj we can get */
+    subj = get_most_specific_var(rule, subj, c, written);
+
+    if (pred || param.final) {
+        ecs_rule_op_t *op = insert_operation(rule, c, written);
+        insert_select_or_with(rule, op, column, subj, written);      
     } else {
-        op->kind = EcsRuleSelect;
-        op->has_out = true;
-        op->r_out = var->id;
+        insert_nonfinal_select_or_with(rule, column, param, subj, c, written);
+    }
+}
+
+static
+void insert_term(
+    ecs_rule_t *rule,
+    ecs_sig_column_t *column,
+    int32_t c,
+    bool *written)
+{
+    if (column->argc == 1) {
+        insert_term_1(rule, column, c, written);
+    } else if (column->argc == 2) {
+        insert_term_2(rule, column, c, written);
     }
 }
 
@@ -1455,24 +1777,7 @@ void compile_program(
             continue;
         }
 
-        /* If predicate and/or object are variables, mark them as written */
-        ecs_rule_var_t 
-        *pred = column_pred(rule, column),
-        *obj = column_obj(rule, column);
-
-        if (pred) {
-            write_variable(rule, pred, c, written);
-        }
-        if (obj) {
-            write_variable(rule, obj, c, written);
-        } 
-
-        op = insert_operation(rule, c);
-        op->kind = EcsRuleWith;
-        op->r_in = UINT8_MAX; /* Indicate literal */
-        op->has_in = true;
-        op->subject = column->argv[0].entity;
-        ecs_assert(op->subject != 0, ECS_INTERNAL_ERROR, NULL);
+        insert_term(rule, column, c, written);
     }
 
     /* Insert variables based on dependency order */
@@ -1490,47 +1795,9 @@ void compile_program(
                 continue;
             }
 
-            bool entity_written = false, table_written = written[var->id];
-            ecs_rule_var_t *entity_var = find_variable(rule, 
-                EcsRuleVarKindEntity, var->name);
-            if (entity_var) {
-                entity_written = written[entity_var->id];
-            }
+            insert_term(rule, column, c, written);
 
-            /* Mark predicate & object variables as entities, as they will be 
-             * written by the operation */
-            ecs_rule_var_t 
-            *pred = column_pred(rule, column),
-            *obj = column_obj(rule, column);
-
-            if (pred) {
-                write_variable(rule, pred, c, written);
-            }
-            if (obj) {
-                write_variable(rule, obj, c, written);
-            }
-
-            op = insert_operation(rule, c);
-
-            /* If the variable is already written as an entity, use From so the
-             * filter is applied to the type of the entity. */
-            if (entity_written) {
-                op->kind = EcsRuleWith;
-                op->has_in = true;
-                op->r_in = entity_var->id;
-            
-            /* If variable is written as a table, use With so the filter is
-             * applied to the table */
-            } else if (table_written) {
-                op->kind = EcsRuleWith;
-                op->has_in = true;
-                op->r_in = var->id;
-           
-            /* If the variable was not written yet, insert a Select */
-            } else {
-                insert_select(rule, op, var, c, written);
-                var = &rule->variables[v];
-            }      
+            var = &rule->variables[v];
         }
     }
 
@@ -1545,7 +1812,7 @@ void compile_program(
              * written. */
             ecs_rule_var_t *var = find_variable(
                 rule, EcsRuleVarKindEntity, rule->variables[v].name);
-            ecs_assert(written[var->id], ECS_INTERNAL_ERROR, NULL);
+            ecs_assert(written[var->id], ECS_INTERNAL_ERROR, var->name);
         }
     }
 
@@ -1567,11 +1834,11 @@ void compile_program(
             /* A table variable must exist if the variable hasn't been resolved
              * yet. If there doesn't exist one, this could indicate an 
              * unconstrained variable which should have been caught earlier */
-            ecs_assert(table_var != NULL, ECS_INTERNAL_ERROR, NULL);
+            ecs_assert(table_var != NULL, ECS_INTERNAL_ERROR, var->name);
 
             /* Insert each operation that takes the table variable as input, and
              * yields each entity in the table */
-            op = insert_operation(rule, -1);
+            op = insert_operation(rule, -1, written);
             op->kind = EcsRuleEach;
             op->r_in = table_var->id;
             op->r_out = var->id;
@@ -1674,42 +1941,42 @@ char* ecs_rule_str(
             }
         }
 
-        ecs_strbuf_append(&buf, "%d: [Pass:%d, Fail:%d] ", i, 
+        ecs_strbuf_append(&buf, "%2d: [P:%2d, F:%2d] ", i, 
             op->on_pass, op->on_fail);
 
         bool has_filter = false;
 
         switch(op->kind) {
         case EcsRuleSelect:
-            ecs_strbuf_append(&buf, "select");
+            ecs_strbuf_append(&buf, "select   ");
             has_filter = true;
             break;
         case EcsRuleWith:
-            ecs_strbuf_append(&buf, "with  ");
+            ecs_strbuf_append(&buf, "with     ");
             has_filter = true;
             break;
         case EcsRuleStore:
-            ecs_strbuf_append(&buf, "store ");
+            ecs_strbuf_append(&buf, "store    ");
             break;
         case EcsRuleSuperSet:
             ecs_strbuf_append(&buf, "superset ");
             has_filter = true;
             break;             
         case EcsRuleSubSet:
-            ecs_strbuf_append(&buf, "subset ");
+            ecs_strbuf_append(&buf, "subset   ");
             has_filter = true;
             break;            
         case EcsRuleEach:
-            ecs_strbuf_append(&buf, "each  ");
+            ecs_strbuf_append(&buf, "each     ");
             break;
         case EcsRuleSetJmp:
-            ecs_strbuf_append(&buf, "setjmp  ");
+            ecs_strbuf_append(&buf, "setjmp   ");
             break;
         case EcsRuleJump:
-            ecs_strbuf_append(&buf, "jump  ");
+            ecs_strbuf_append(&buf, "jump     ");
             break;            
         case EcsRuleYield:
-            ecs_strbuf_append(&buf, "yield ");
+            ecs_strbuf_append(&buf, "yield    ");
             break;
         default:
             continue;
@@ -1718,11 +1985,11 @@ char* ecs_rule_str(
         if (op->has_in) {
             ecs_rule_var_t *r_in = get_variable(rule, op->r_in);
             if (r_in) {
-                ecs_strbuf_append(&buf, " %s%s", 
+                ecs_strbuf_append(&buf, "I:%s%s ", 
                     r_in->kind == EcsRuleVarKindTable ? "t" : "",
                     r_in->name);
             } else if (op->subject) {
-                ecs_strbuf_append(&buf, " %s", 
+                ecs_strbuf_append(&buf, "I:%s ", 
                     ecs_get_name(rule->world, op->subject));
             }
         }
@@ -1730,11 +1997,11 @@ char* ecs_rule_str(
         if (op->has_out) {
             ecs_rule_var_t *r_out = get_variable(rule, op->r_out);
             if (r_out) {
-                ecs_strbuf_append(&buf, " > %s%s", 
+                ecs_strbuf_append(&buf, "O:%s%s ", 
                     r_out->kind == EcsRuleVarKindTable ? "t" : "",
                     r_out->name);
             } else if (op->subject) {
-                ecs_strbuf_append(&buf, " > %s <- ", 
+                ecs_strbuf_append(&buf, "O:%s ", 
                     ecs_get_name(rule->world, op->subject));
             }
         }
@@ -1745,7 +2012,7 @@ char* ecs_rule_str(
             } else {
                 sprintf(filter_expr, "(%s, %s)", type_name, object_name);
             }
-            ecs_strbuf_append(&buf, " %s", filter_expr);
+            ecs_strbuf_append(&buf, "F:%s", filter_expr);
         }
 
         ecs_strbuf_appendstr(&buf, "\n");
@@ -1801,7 +2068,7 @@ ecs_entity_t ecs_rule_variable(
 
     /* We can only return entity variables */
     if (it->rule->variables[var_id].kind == EcsRuleVarKindEntity) {
-        ecs_rule_reg_t *regs = get_registers(it, it->op);
+        ecs_rule_reg_t *regs = get_registers(it, it->rule->operation_count - 1);
         return entity_reg_get(it->rule, regs, var_id);
     } else {
         return 0;
@@ -1868,6 +2135,57 @@ void ecs_rule_iter_free(
     it->op_ctx = NULL;
 }
 
+/* This function iterates a type with a provided pair expression, as is returned
+ * by pair_get_most_specific_var. It starts looking in the type at an offset ('column') and
+ * returns the first matching element. */
+static
+int32_t find_next_match(
+    ecs_type_t type, 
+    int32_t column,
+    ecs_rule_filter_t *filter)
+{
+    /* Scan the type for the next match */
+    int32_t i, count = ecs_vector_count(type);
+    ecs_entity_t *entities = ecs_vector_first(type, ecs_entity_t);
+
+    /* If the predicate is not a wildcard, the next element must match the 
+     * queried for entity, or the type won't contain any more matches. The
+     * reason for this is that ids in a type are sorted, and the predicate
+     * occupies the most significant bits in the type */
+    if (!filter->pred_wildcard) {
+        /* Evaluate at most one element if column is not 0. If column is 0,
+         * the entire type is evaluated. */
+        if (column && column < count) {
+            count = column + 1;
+        }
+    }
+
+    /* Find next column that equals look_for after masking out the wildcards */
+    ecs_entity_t expr_mask = filter->expr_mask;
+    ecs_entity_t expr_match = filter->expr_match;
+
+    for (i = column; i < count; i ++) {
+        if ((entities[i] & expr_mask) == expr_match) {
+            if (filter->same_var) {
+                ecs_entity_t lo_id = ecs_entity_t_lo(entities[i]);
+                ecs_entity_t hi_id = ecs_entity_t_hi(
+                    entities[i] & ECS_COMPONENT_MASK);
+
+                /* If pair contains the same variable twice but the matched id
+                 * has different values, this is not a match */
+                if (lo_id != hi_id) {
+                    continue;
+                }
+            }
+
+            return i;
+        }
+    }
+
+    /* No matching columns were found in remainder of type */
+    return -1;
+}
+
 /* This function finds the next table in a table set, and is used by the select
  * operation. The function automatically skips empty tables, so that subsequent
  * operations don't waste a lot of processing for nothing. */
@@ -1920,85 +2238,31 @@ ecs_sparse_t* find_table_set(
 }
 
 static
-void set_column(
+ecs_entity_t get_column(
+    ecs_type_t type,
+    int32_t column)
+{
+    ecs_entity_t *comp = ecs_vector_get(type, ecs_entity_t, column);
+    ecs_assert(comp != NULL, ECS_INTERNAL_ERROR, NULL);
+    return *comp;
+}
+
+static
+ecs_entity_t set_column(
     ecs_rule_iter_t *it,
     ecs_rule_op_t *op,
     ecs_type_t type,
     int32_t column)
 {
     if (op->column == -1) {
-        return;
+        return -1;
     }
 
     if (type) {
-        ecs_entity_t *comp = ecs_vector_get(type, ecs_entity_t, column);
-        ecs_assert(comp != NULL, ECS_INTERNAL_ERROR, NULL);
-        it->table.components[op->column] = *comp;
+        return it->table.components[op->column] = get_column(type, column);
     } else {
-        it->table.components[op->column] = 0;
+        return it->table.components[op->column] = 0;
     }
-}
-
-/* Test if provided object has a transitive relationship with the filter */
-static
-bool test_if_transitive(
-    ecs_world_t *world,
-    ecs_sparse_t *table_set,
-    ecs_sparse_t *all_for_pred,
-    ecs_entity_t table_obj,
-    ecs_rule_filter_t *filter,
-    ecs_rule_filter_t *tr_filter)
-{
-    ecs_table_t *table = table_from_entity(world, table_obj);
-
-    /* If entity has no table, it has no relationships and can therefore not
-     * have a transitive relationship with the object in the filter */
-    if (!table) {
-        return false;
-    }
-
-    ecs_table_record_t *table_record = ecs_sparse_get_sparse(
-        table_set, ecs_table_record_t, table->id);
-
-    /* If the table of the entity is in the required table set, the relationship
-     * was matched. */
-    if (table_record) {
-        return true;
-    }
-
-    /* If the object does not have a direct transitive relationship with the
-     * required object, keep searching by using the transitive table set. This
-     * set contains all tables that have one or more instances of the transitive
-     * predicate. */
-    table_record = ecs_sparse_get_sparse(
-        all_for_pred, ecs_table_record_t, table->id);
-    
-    /* If no table record was found in the transitive table set, it has no
-     * instances of the transitive predicate and therefore cannot have a
-     * transitive relationship with the object in the filter. */
-    if (!table_record) {
-        return false;
-    }
-
-    /* If a table set is found, loop each instance of the transitive predicate
-     * and search recursively until a transitive relationship has been found */
-    table = table_record->table;
-    ecs_type_t type = table->type;
-    int32_t column = table_record->column;
-
-    do {
-        ecs_entity_t obj = *(ecs_vector_get(type, ecs_entity_t, column));        
-        obj = ecs_entity_t_lo(obj);
-
-        if (test_if_transitive(world, table_set, all_for_pred, obj, filter, 
-            tr_filter))
-        {
-            return true;
-        }
-    } while ((column = find_next_match(type, column + 1, tr_filter)) != -1);
-    
-    /* No transitive relationship has been found */
-    return false;
 }
 
 /* Input operation. The input operation acts as a placeholder for the start of
@@ -2020,6 +2284,125 @@ bool eval_input(
          * return false. This will terminate rule execution. */
         return false;
     }
+}
+
+static
+bool eval_superset(
+    ecs_rule_iter_t *it,
+    ecs_rule_op_t *op,
+    int32_t op_index,
+    bool redo)
+{
+    const ecs_rule_t  *rule = it->rule;
+    ecs_world_t *world = rule->world;
+    ecs_rule_superset_ctx_t *op_ctx = &it->op_ctx[op_index].is.superset;
+    ecs_rule_superset_frame_t *frame = NULL;
+    ecs_table_record_t table_record;
+    ecs_rule_reg_t *regs = get_registers(it, op_index);
+
+    /* Get register indices for output */
+    int32_t sp, row;
+    int32_t r = op->r_out;
+
+    /* Register cannot be a literal, since we need to store things in it */
+    ecs_assert(r != UINT8_MAX, ECS_INTERNAL_ERROR, NULL);
+
+    /* Superset results are always stored in an entity variable */
+    ecs_assert(rule->variables[regs[r].var_id].kind == EcsRuleVarKindEntity,    
+        ECS_INTERNAL_ERROR, NULL);
+
+    /* Get queried for id, fill out potential variables */
+    ecs_rule_pair_t pair = op->param;
+    ecs_rule_filter_t filter = pair_to_filter(it, pair);
+    ecs_sparse_t *table_set;
+    ecs_table_t *table = NULL;
+
+    if (!redo) {
+        op_ctx->stack = op_ctx->storage;
+        sp = op_ctx->sp = 0;
+        frame = &op_ctx->stack[sp];
+
+        ecs_entity_t mask = ecs_trait(EcsWildcard, pair.pred);
+        table_set = op_ctx->table_set = find_table_set(world, mask);
+
+        /* If no table set is found for the transitive relationship, there are 
+         * no supersets */
+        if (!table_set) {
+            return false;
+        }
+
+        /* Get table of object for which to get supersets */
+        ecs_entity_t obj = ecs_entity_t_lo(filter.mask);
+
+        /* If obj is wildcard, there's nothing to determine a superset for */
+        ecs_assert(obj != EcsWildcard, ECS_INTERNAL_ERROR, NULL);
+
+        /* Find first matching column in table */
+        table = table_from_entity(world, obj);
+        filter.mask = mask;
+        set_filter_expr_mask(&filter, mask);
+        int32_t column = find_next_match(table->type, 0, &filter);
+
+        /* If no matching column was found, there are no supersets */
+        if (column == -1) {
+            return false;
+        }
+
+        ecs_entity_t col_entity = get_column(table->type, column);
+        ecs_entity_t col_obj = ecs_entity_t_lo(col_entity);
+
+        entity_reg_set(rule, regs, r, col_obj);
+        set_column(it, op, table->type, column);
+
+        frame->table = table;
+        frame->column = column;
+
+        return true;
+    }
+
+    table_set = op_ctx->table_set;
+    sp = op_ctx->sp;
+    frame = &op_ctx->stack[sp];
+    table = frame->table;
+    int32_t column = frame->column;
+
+    ecs_entity_t mask = ecs_trait(EcsWildcard, pair.pred);
+    filter.mask = mask;
+    set_filter_expr_mask(&filter, mask);
+
+    ecs_entity_t col_entity = get_column(table->type, column);
+    ecs_entity_t col_obj = ecs_entity_t_lo(col_entity);
+    ecs_table_t *next_table = table_from_entity(world, col_obj);
+
+    if (next_table) {
+        sp ++;
+        frame = &op_ctx->stack[sp];
+        frame->table = next_table;
+        frame->column = -1;
+    }
+
+    do {
+        frame = &op_ctx->stack[sp];
+        table = frame->table;
+        column = frame->column;
+
+        column = find_next_match(table->type, column + 1, &filter);
+        if (column != -1) {
+            op_ctx->sp = sp;
+            frame->column = column;
+            col_entity = get_column(table->type, column);
+            col_obj = ecs_entity_t_lo(col_entity);
+
+            entity_reg_set(rule, regs, r, col_obj);
+            set_column(it, op, table->type, column);
+
+            return true;        
+        }
+
+        sp --;
+    } while (sp >= 0);
+
+    return false;
 }
 
 static
@@ -2062,7 +2445,7 @@ bool eval_subset(
         frame->with_ctx.table_index = -1;
         table_record = find_next_table(table_set, &filter, &frame->with_ctx);
         
-        /* If first table set does has no non-empty table, yield nothing */
+        /* If first table set has no non-empty table, yield nothing */
         if (!table_record.table) {
             return false;
         }
@@ -2305,7 +2688,7 @@ bool eval_with(
 
     /* If looked for entity is not a wildcard (meaning there are no unknown/
      * unconstrained variables) and this is a redo, nothing more to yield. */
-    if (redo && !filter.wildcard && !pair.transitive) {
+    if (redo && !filter.wildcard) {
         return false;
     }
 
@@ -2321,6 +2704,46 @@ bool eval_with(
      * the first time the operation is evaluated, variables may have changed
      * since last time, which could change the table set to lookup. */
     } else {
+        /* Transitive queries are inclusive, which means that if we have a
+         * transitive predicate which is provided with the same subject and
+         * object, it should return true. By default with will not return true
+         * as the subject likely does not have itself as a relationship, which
+         * is why this is a special case. 
+         *
+         * TODO: might want to move this code to a separate with_inclusive
+         * instruction to limit branches for non-transitive queries (and to keep
+         * code more readable).
+         */
+        if (pair.transitive) {
+            ecs_entity_t subj = 0, obj = 0;
+            
+            if (r == UINT8_MAX) {
+                subj = op->subject;
+            } else {
+                ecs_rule_var_t *v_subj = &rule->variables[r];
+                if (v_subj->kind == EcsRuleVarKindEntity) {
+                    subj = entity_reg_get(rule, regs, r);
+
+                    /* This is the input for the op, so should always be set */
+                    ecs_assert(subj != 0, ECS_INTERNAL_ERROR, NULL);
+                }
+            }
+
+            /* If subj is set, it means that it is an entity. Try to also 
+             * resolve the object. */
+            if (subj) {
+                /* If the object is not a wildcard, it has been reified. Get the
+                 * value from either the register or as a literal */
+                if (!filter.obj_wildcard) {
+                    obj = ecs_entity_t_lo(filter.mask);
+                    if (subj == obj) {
+                        it->table.components[op->column] = filter.mask;
+                        return true;
+                    }
+                }
+            }
+        }
+
         /* The With operation finds the table set that belongs to its pair
          * filter. The table set is a sparse set that provides an O(1) operation
          * to check whether the current table has the required expression. */
@@ -2354,12 +2777,9 @@ bool eval_with(
         table_record = ecs_sparse_get_sparse(
             table_set, ecs_table_record_t, table->id);
 
-        /* If no table record was found, there are no results, unless the 
-         * predicate is transitive. */
+        /* If no table record was found, there are no results. */
         if (!table_record) {
-            if (!pair.transitive && !filter.obj_wildcard) {
-                return false;
-            }
+            return false;
         } else {
             ecs_assert(table == table_record->table, ECS_INTERNAL_ERROR, NULL);
 
@@ -2390,83 +2810,7 @@ bool eval_with(
 
     /* If no next match was found for this table, no more data */
     if (new_column == -1) {
-        /* .. unless this is a transitive query, in which case we need to find a
-         * matching column for the transitive mask (see above) and check if the
-         * object in the table has a transitive relationship with the object in
-         * the filter. */
-        if (!filter.obj_wildcard && pair.transitive) {
-            ecs_rule_filter_t tr_filter = filter;
-            ecs_entity_t mask = ecs_trait(EcsWildcard, pair.pred);
-            tr_filter.mask = mask;
-            set_filter_expr_mask(&tr_filter, mask);
-
-            /* Find table set with the object replaced by a wildcard. This will
-             * contain all tables for the transitive predicate. */
-            ecs_sparse_t *all_for_pred;
-            if (!redo) {
-                all_for_pred = op_ctx->all_for_pred = find_table_set(
-                    world, tr_filter.mask);
-
-                /* Should always have a table set, since the table set that we 
-                 * found already is a subset of this one */
-                ecs_assert(all_for_pred != NULL, ECS_INTERNAL_ERROR, NULL);
-
-                /* Find table in table set. This will give us the first column
-                 * in which the predicate appears. The column has not yet been
-                 * resolved, because the table set we looked up did not have the
-                 * table we're evaluating. */
-                table_record = ecs_sparse_get_sparse(
-                    all_for_pred, ecs_table_record_t, table->id);
-                
-                /* If the table does not appear in the table set that contains
-                 * all tables for the transitive predicate, there is no match */
-                if (!table_record) {
-                    return false;
-                }
-
-                /* Set the starting column. Offset by -1 because the next code
-                 * adds one to the column to make sure find_next_match makes
-                 * progress when scanning the table type */
-                column = table_record->column - 1;
-            } else {
-                /* Not the first time the op is evaluated, get transitive table
-                 * set and column from previous eval */
-                all_for_pred = op_ctx->all_for_pred;
-                column = columns[op->column];
-            }
-
-            ecs_assert(column != -1, ECS_INTERNAL_ERROR, NULL);
-            
-            ecs_entity_t table_obj;
-            new_column = column;
-
-            do {
-                /* Find next matching column in table that has the transitive
-                 * predicate */
-                new_column = find_next_match(
-                    table->type, new_column + 1, &tr_filter);
-                
-                /* If no more column were found for the predicate, there are no
-                 * more results. */
-                if (new_column == -1) {
-                    return false;
-                }
-
-                /* Get the object from the column. We'll have to check if it has
-                 * a transitive relationship to the object in the filter */
-                table_obj = *(ecs_vector_get(
-                    table->type, ecs_entity_t, new_column));
-
-                table_obj = ecs_entity_t_lo(table_obj);
-
-            /* Keep checking columns until a match has been found */
-            } while (!test_if_transitive(world, table_set, all_for_pred, 
-                table_obj, &filter, &tr_filter));
-
-            column = new_column;
-        } else {
-            return false;
-        }
+        return false;
     }
 
     column = columns[op->column] = new_column;
@@ -2583,8 +2927,10 @@ bool eval_store(
     ecs_entity_t e = reg_get_entity(rule, op, regs, r_in);
     reg_set_entity(rule, regs, r_out, e);
 
-    /* Set column to 0, as we're not yielding a specific column of the entity */
-    set_column(it, op, NULL, 0);
+    if (op->column >= 0) {
+        ecs_rule_filter_t filter = pair_to_filter(it, op->param);
+        it->table.components[op->column] = filter.mask;
+    }
 
     return true;
 }
@@ -2659,7 +3005,9 @@ bool eval_op(
     case EcsRuleWith:
         return eval_with(it, op, op_index, redo);
     case EcsRuleSubSet:
-        return eval_subset(it, op, op_index, redo);                      
+        return eval_subset(it, op, op_index, redo);
+    case EcsRuleSuperSet:
+        return eval_superset(it, op, op_index, redo);
     case EcsRuleEach:
         return eval_each(it, op, op_index, redo);
     case EcsRuleStore:
@@ -2797,18 +3145,19 @@ void populate_iterator(
              * iterator with count 1 and a pointer to the entity id */
             ecs_assert(var->kind == EcsRuleVarKindEntity, 
                 ECS_INTERNAL_ERROR, NULL);
+
             ecs_entity_t e = reg->is.entity;
             ecs_record_t *record = ecs_eis_get(rule->world, e);
+            
+            bool is_monitored;
+            int32_t offset = iter->offset = ecs_record_to_row(
+                record->row, &is_monitored);
 
             /* If an entity is not stored in a table, it could not have
              * been matched by anything */
             ecs_assert(record != NULL, ECS_INTERNAL_ERROR, NULL);
-            set_iter_table(iter, record->table, op_index, 0);
+            set_iter_table(iter, record->table, op_index, offset);
             iter->count = 1;
-
-            bool is_monitored;
-            iter->offset = ecs_record_to_row(
-                record->row, &is_monitored);
         }
     }   
 }

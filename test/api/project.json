@@ -43,8 +43,16 @@
                 "join_by_predicate_from_subject",
                 "find_transitive",
                 "find_transitive_2_branches",
-                "find_transitive_subtree",
-                "find_transitive_instances",
+                "transitive_subsets",
+                "transitive_subsets_2_terms",
+                "transitive_supersets",
+                "transitive_superset_w_subj_var",
+                "transitive_superset_w_subj_var_2_term",
+                "transitive_supersets_2_terms",
+                "transitive_instances",
+                "transitive_instances_2_terms",              
+                "transitive_implicit_isa_instances",
+                "transitive_implicit_isa_instances_2_terms",
                 "transitive_fact_false",
                 "transitive_fact_true_depth_1",
                 "transitive_fact_true_depth_2",
@@ -52,9 +60,11 @@
                 "transitive_fact_true_depth_4",
                 "transitive_fact_true_depth_5",
                 "transitive_fact_true_2_relationships",
+                "transitive_fact_same_subj_obj",
+                "transitive_fact_subset_superset",
+                "transitive_all",
                 "same_pred_obj",
-                "same_pred_obj_explicit_subject",
-                "transitive_predicate_instances"
+                "same_pred_obj_explicit_subject"
             ]
         }, {
             "id": "New",
