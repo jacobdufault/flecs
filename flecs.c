@@ -13199,7 +13199,7 @@ ecs_rule_reg_t* get_registers(
  * index at which it occurs. This reduces the amount of searching that
  * operations need to do in a type, since select/with already provide it. */
 static
-int32_t* get_columns(
+int32_t* rule_get_columns(
     ecs_rule_iter_t *it,
     int32_t op)    
 {
@@ -15084,7 +15084,7 @@ ecs_sparse_t* find_table_set(
 }
 
 static
-ecs_entity_t get_column(
+ecs_entity_t rule_get_column(
     ecs_type_t type,
     int32_t column)
 {
@@ -15105,7 +15105,7 @@ ecs_entity_t set_column(
     }
 
     if (type) {
-        return it->table.components[op->column] = get_column(type, column);
+        return it->table.components[op->column] = rule_get_column(type, column);
     } else {
         return it->table.components[op->column] = 0;
     }
@@ -15194,7 +15194,7 @@ bool eval_superset(
             return false;
         }
 
-        ecs_entity_t col_entity = get_column(table->type, column);
+        ecs_entity_t col_entity = rule_get_column(table->type, column);
         ecs_entity_t col_obj = ecs_entity_t_lo(col_entity);
 
         entity_reg_set(rule, regs, r, col_obj);
@@ -15216,7 +15216,7 @@ bool eval_superset(
     filter.mask = mask;
     set_filter_expr_mask(&filter, mask);
 
-    ecs_entity_t col_entity = get_column(table->type, column);
+    ecs_entity_t col_entity = rule_get_column(table->type, column);
     ecs_entity_t col_obj = ecs_entity_t_lo(col_entity);
     ecs_table_t *next_table = table_from_entity(world, col_obj);
 
@@ -15236,7 +15236,7 @@ bool eval_superset(
         if (column != -1) {
             op_ctx->sp = sp;
             frame->column = column;
-            col_entity = get_column(table->type, column);
+            col_entity = rule_get_column(table->type, column);
             col_obj = ecs_entity_t_lo(col_entity);
 
             entity_reg_set(rule, regs, r, col_obj);
@@ -15445,7 +15445,7 @@ bool eval_select(
         return false;
     }
 
-    int32_t *columns = get_columns(it, op_index);
+    int32_t *columns = rule_get_columns(it, op_index);
 
     /* If this is not a redo, start at the beginning */
     if (!redo) {
@@ -15605,7 +15605,7 @@ bool eval_with(
         return false;
     }
 
-    int32_t *columns = get_columns(it, op_index);
+    int32_t *columns = rule_get_columns(it, op_index);
     int32_t new_column = -1;
 
     /* If this is not a redo, start at the beginning */
@@ -15903,8 +15903,8 @@ void push_columns(
         return;
     }
 
-    int32_t *src_cols = get_columns(it, cur);
-    int32_t *dst_cols = get_columns(it, next);
+    int32_t *src_cols = rule_get_columns(it, cur);
+    int32_t *dst_cols = rule_get_columns(it, next);
 
     memcpy(dst_cols, src_cols, ECS_SIZEOF(int32_t) * it->rule->column_count);
 }
@@ -15934,7 +15934,7 @@ void set_iter_table(
     iter->entities = &entities[offset];
 
     /* Set table parameters */
-    it->table.columns = get_columns(it, cur);
+    it->table.columns = rule_get_columns(it, cur);
     it->table.data = data;
     iter->table_columns = data->columns;
 
