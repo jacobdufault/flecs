@@ -1462,6 +1462,9 @@ ecs_rule_var_t* store_inclusive_set(
         root = &rule->variables[root_id];
     }
 
+    /* Ensure we're using the most specific version of root */
+    root = get_most_specific_var(rule, root, written);
+
     /* Generate the operations */
     insert_inclusive_set(
         rule, op_kind, av, param, root, root_entity, -1, written);

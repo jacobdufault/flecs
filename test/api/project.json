@@ -49,6 +49,7 @@
                 "transitive_superset_w_subj_var",
                 "transitive_superset_w_subj_var_2_term",
                 "transitive_supersets_2_terms",
+                "transitive_constraint_on_superset_var",
                 "transitive_instances",
                 "transitive_instances_2_terms",              
                 "transitive_implicit_isa_instances",

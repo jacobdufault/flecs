@@ -43,6 +43,7 @@ void Rules_transitive_supersets(void);
 void Rules_transitive_superset_w_subj_var(void);
 void Rules_transitive_superset_w_subj_var_2_term(void);
 void Rules_transitive_supersets_2_terms(void);
+void Rules_transitive_constraint_on_superset_var(void);
 void Rules_transitive_instances(void);
 void Rules_transitive_instances_2_terms(void);
 void Rules_transitive_implicit_isa_instances(void);
@@ -1683,6 +1684,10 @@ bake_test_case Rules_testcases[] = {
     {
         "transitive_supersets_2_terms",
         Rules_transitive_supersets_2_terms
+    },
+    {
+        "transitive_constraint_on_superset_var",
+        Rules_transitive_constraint_on_superset_var
     },
     {
         "transitive_instances",
@@ -7308,7 +7313,7 @@ static bake_test_suite suites[] = {
         "Rules",
         NULL,
         NULL,
-        50,
+        51,
         Rules_testcases
     },
     {
