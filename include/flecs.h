@@ -2520,6 +2520,10 @@ void ecs_rule_free(
     ecs_rule_t *rule);
 
 FLECS_API
+int32_t ecs_rule_term_count(
+    const ecs_rule_t *rule);
+
+FLECS_API
 int32_t ecs_rule_variable_count(
     const ecs_rule_t *rule);
 
