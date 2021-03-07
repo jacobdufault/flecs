@@ -45,6 +45,7 @@
                 "find_transitive_2_branches",
                 "transitive_subsets",
                 "transitive_subsets_2_terms",
+                "transitive_w_table_object",
                 "transitive_supersets",
                 "transitive_superset_w_subj_var",
                 "transitive_superset_w_subj_var_2_term",

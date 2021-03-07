@@ -39,6 +39,7 @@ void Rules_find_transitive(void);
 void Rules_find_transitive_2_branches(void);
 void Rules_transitive_subsets(void);
 void Rules_transitive_subsets_2_terms(void);
+void Rules_transitive_w_table_object(void);
 void Rules_transitive_supersets(void);
 void Rules_transitive_superset_w_subj_var(void);
 void Rules_transitive_superset_w_subj_var_2_term(void);
@@ -1668,6 +1669,10 @@ bake_test_case Rules_testcases[] = {
     {
         "transitive_subsets_2_terms",
         Rules_transitive_subsets_2_terms
+    },
+    {
+        "transitive_w_table_object",
+        Rules_transitive_w_table_object
     },
     {
         "transitive_supersets",
@@ -7313,7 +7318,7 @@ static bake_test_suite suites[] = {
         "Rules",
         NULL,
         NULL,
-        51,
+        52,
         Rules_testcases
     },
     {

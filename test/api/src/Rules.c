@@ -1148,6 +1148,48 @@ void Rules_transitive_subsets_2_terms() {
     ecs_fini(world);    
 }
 
+void Rules_transitive_w_table_object() {
+    ecs_world_t *world = ecs_init();
+
+    test_assert(ecs_plecs_from_str(world, NULL, rules) == 0);
+
+    ecs_rule_t *r = ecs_rule_new(world, "Sentient(X), IsA(Y, X)");
+    test_assert(r != NULL);
+
+    int32_t x_var = ecs_rule_find_variable(r, "X");
+    test_assert(x_var != -1);
+
+    int32_t y_var = ecs_rule_find_variable(r, "Y");
+    test_assert(y_var != -1);
+
+    ecs_iter_t it = ecs_rule_iter(r);
+
+    test_assert(ecs_rule_next(&it));
+    test_column_entity(&it, 1, "Sentient");
+    test_column_entity(&it, 2, "(IsA,Droid)");
+    test_var(&it, x_var, "Droid");
+    test_var(&it, y_var, "Droid");
+    test_int(it.count, 0);
+
+    test_assert(ecs_rule_next(&it));
+    test_column_entity(&it, 1, "Sentient");
+    test_column_entity(&it, 2, "(IsA,Human)");
+    test_var(&it, x_var, "Human");
+    test_var(&it, y_var, "Human");
+    test_int(it.count, 0);
+
+    test_assert(ecs_rule_next(&it));
+    test_column_entity(&it, 1, "Sentient");
+    test_column_entity(&it, 2, "(IsA,Human)");
+    test_var(&it, x_var, "Human");
+    test_var(&it, y_var, "Cyborg");
+    test_int(it.count, 0);
+
+    test_assert(!ecs_rule_next(&it));
+
+    ecs_fini(world);   
+}
+
 void Rules_transitive_supersets() {
     ecs_world_t *world = ecs_init();
 
@@ -1290,7 +1332,7 @@ void Rules_transitive_superset_w_subj_var_2_term() {
     test_assert(ecs_rule_next(&it));
     test_column_entity(&it, 1, "(IsA,SentientMachine)");
     test_column_entity(&it, 2, "(IsA,Machine)");
-    test_var(&it, x_var, "Machine");   
+    test_var(&it, x_var, "Machine");
     test_int(it.count, 1);
     test_str(ecs_get_name(world, it.entities[0]), "SentientMachine");
 

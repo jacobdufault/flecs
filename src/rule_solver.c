@@ -1671,6 +1671,8 @@ void insert_term_2(
                 op->param.obj = obj_subsets->id;
                 op->param.reg_mask = RULE_PAIR_OBJECT;
             } else {
+                ecs_assert(obj != NULL, ECS_INTERNAL_ERROR, NULL);
+
                 obj = to_entity(rule, obj);
 
                 insert_inclusive_set(
@@ -1678,19 +1680,26 @@ void insert_term_2(
                     column->argv[0].entity, c, written);
             }
         } else {
+            ecs_assert(subj != NULL, ECS_INTERNAL_ERROR, NULL);
+
             if (is_known(rule, obj, written)) {
+                /* Object variable is known, but this does not guarantee that
+                 * we are working with the entity. Make sure that we get (and
+                 * populate) the entity variable, as insert_inclusive_set does
+                 * not do this */
+                obj = get_most_specific_var(rule, obj, written);
+
                 insert_inclusive_set(
                     rule, EcsRuleSubSet, subj, param, obj, 
                     column->argv[1].entity, c, written);
             } else {
+                ecs_assert(obj != NULL, ECS_INTERNAL_ERROR, NULL);
+
                 ecs_rule_var_t *av = create_anonymous_variable(
                     rule, EcsRuleVarKindEntity);
 
                 subj = &rule->variables[subj_id];
-
-                if (obj) {
-                    obj = &rule->variables[obj_id];
-                }
+                obj = &rule->variables[obj_id];
 
                 /* TODO: this instruction currently does not return inclusive
                  * results. For example, it will return IsA(XWing, Machine) and
